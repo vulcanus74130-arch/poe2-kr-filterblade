@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         POE2 KR FilterBlade Localizer
 // @namespace    https://filterblade.xyz/poe2-kr-localizer
-// @version      0.2.1
+// @version      0.2.2
 // @description  FilterBlade Path of Exile 2 화면과 아이템명을 한국어로 표시하고, 한글 아이템명 입력을 영어 원문 검색값으로 변환합니다.
 // @author       POE2 KR FilterBlade Localizer Contributors
 // @match        https://www.filterblade.xyz/*
@@ -9,8 +9,8 @@
 // @icon         https://www.filterblade.xyz/favicon.ico
 // @run-at       document-idle
 // @grant        none
-// @updateURL    https://raw.githubusercontent.com/vulcanus74130-arch/poe2-kr-filterblade/main/poe2-kr-filterblade.user.js
-// @downloadURL  https://raw.githubusercontent.com/vulcanus74130-arch/poe2-kr-filterblade/main/poe2-kr-filterblade.user.js
+// @updateURL    https://poe2-0-5-0-patch-notes.netlify.app/poe2-kr-filterblade.user.js
+// @downloadURL  https://poe2-0-5-0-patch-notes.netlify.app/poe2-kr-filterblade.user.js
 // ==/UserScript==
 
 (function () {
