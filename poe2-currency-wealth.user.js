@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         POE2 공개 창고 화폐 자산 계산기
 // @namespace    https://poe2.kr/
-// @version      0.6.0
+// @version      0.6.1
 // @description  정확한 탭 표식 가격으로 공개 창고의 화폐성 자산을 로컬에서 계산합니다.
 // @match        https://www.pathofexile.com/trade2/*
 // @match        https://www.pathofexile.com/ko/trade2/*
@@ -1630,8 +1630,17 @@
         `총자산 변화 ${signedValue(comparison.totalChangeExalted, rate, multiplier, currency)}`,
         `수량 변화 영향 ${signedValue(comparison.quantityChangeExalted, rate, multiplier, currency)}`,
         `시세 변화 영향 ${signedValue(comparison.priceChangeExalted, rate, multiplier, currency)}`,
-        `신규 ${comparison.newItems.length}개 · 소진 ${comparison.depletedItems.length}개`
+        `신규 ${comparison.newItems.length}개 · 소진 ${comparison.depletedItems.length}개`,
+        comparison.newItems.length
+          ? `신규 품목: ${comparison.newItems.map((item) => item.name).join(", ")}`
+          : "",
+        comparison.depletedItems.length
+          ? `소진 품목: ${comparison.depletedItems
+              .map((item) => item.name)
+              .join(", ")}`
+          : ""
       ]) {
+        if (!text) continue;
         const line = document.createElement("div");
         line.textContent = text;
         ui.changeSummary.append(line);
