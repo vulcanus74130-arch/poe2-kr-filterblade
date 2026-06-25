@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         POE2 공개 창고 화폐 자산 계산기
 // @namespace    https://poe2.kr/
-// @version      0.3.1
+// @version      0.4.0
 // @description  정확한 탭 표식 가격으로 공개 창고의 화폐성 자산을 로컬에서 계산합니다.
 // @match        https://www.pathofexile.com/trade2/*
 // @match        https://www.pathofexile.com/ko/trade2/*
@@ -9,6 +9,7 @@
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
 // @connect      www.pathofexile.com
+// @connect      poe.kakaogames.com
 // @connect      poe.ninja
 // @run-at       document-idle
 // @updateURL    https://filterblade-kr-localizer.netlify.app/poe2-currency-wealth.user.js
@@ -57,18 +58,18 @@
   ];
 
   const DISPLAY_CURRENCIES = [
-    { id: "exalted", label: "Exalted Orb", short: "ex" },
-    { id: "chaos", label: "Chaos Orb", short: "c" },
-    { id: "divine", label: "Divine Orb", short: "d" },
-    { id: "annul", label: "Orb of Annulment", short: "annul" }
+    { id: "exalted", label: "엑잘티드 오브", short: "엑잘" },
+    { id: "chaos", label: "카오스 오브", short: "카오스" },
+    { id: "divine", label: "디바인 오브", short: "딥" },
+    { id: "annul", label: "소멸의 오브", short: "소멸" }
   ];
 
   const MARKER_CURRENCIES = [
-    { id: "mirror", label: "Mirror of Kalandra" },
-    { id: "divine", label: "Divine Orb" },
-    { id: "exalted", label: "Exalted Orb" },
-    { id: "chaos", label: "Chaos Orb" },
-    { id: "annul", label: "Orb of Annulment" }
+    { id: "mirror", label: "칼란드라의 거울" },
+    { id: "divine", label: "디바인 오브" },
+    { id: "exalted", label: "엑잘티드 오브" },
+    { id: "chaos", label: "카오스 오브" },
+    { id: "annul", label: "소멸의 오브" }
   ];
 
   const ASSET_SEARCH_PARTITIONS = [
@@ -184,8 +185,15 @@
     return currencies;
   }
 
-  function createAllowedItemMap(groups) {
+  function createAllowedItemMap(groups, localizedGroups = []) {
     const itemMap = new Map();
+    const localizedEntries = new Map();
+
+    for (const group of localizedGroups || []) {
+      for (const entry of group.entries || []) {
+        if (entry.id && entry.text) localizedEntries.set(entry.id, entry.text);
+      }
+    }
 
     for (const group of groups) {
       if (!ALLOWED_GROUPS.has(group.id)) continue;
@@ -194,7 +202,7 @@
         if (EXCLUDED_NAME_PATTERNS.some((pattern) => pattern.test(entry.text))) continue;
         itemMap.set(normalizeName(entry.text), {
           tradeId: entry.id,
-          name: entry.text,
+          name: localizedEntries.get(entry.id) || entry.text,
           image: entry.image
             ? new URL(entry.image, "https://www.pathofexile.com").href
             : "",
@@ -205,6 +213,45 @@
     }
 
     return itemMap;
+  }
+
+  function localizeResultNames(result, localizedGroups = []) {
+    if (!result) return result;
+    const localizedEntries = new Map();
+    for (const group of localizedGroups || []) {
+      for (const entry of group.entries || []) {
+        if (entry.id && entry.text) localizedEntries.set(entry.id, entry.text);
+      }
+    }
+    const localizeItems = (items) =>
+      (items || []).map((item) => ({
+        ...item,
+        name: localizedEntries.get(item.tradeId) || item.name
+      }));
+    return {
+      ...result,
+      visibleItems: localizeItems(result.visibleItems),
+      unpricedItems: localizeItems(result.unpricedItems)
+    };
+  }
+
+  function localizeTabName(tabName) {
+    const value = String(tabName || "알 수 없는 탭");
+    const match = value.match(/^~(?:price|b\/o)\s+([0-9.]+)\s+(\S+)$/i);
+    if (!match) return value;
+    const currency =
+      MARKER_CURRENCIES.find((entry) => entry.id === match[2].toLowerCase())
+        ?.label || match[2];
+    return `${match[1]} ${currency} 일괄 가격 탭`;
+  }
+
+  function valuesFromExalted(exaltedValue, rates) {
+    return Object.fromEntries(
+      DISPLAY_CURRENCIES.map((currency) => [
+        currency.id,
+        rates?.[currency.id] > 0 ? exaltedValue / rates[currency.id] : null
+      ])
+    );
   }
 
   function collectAllowedHoldings(fetchedItems, allowedItems, markerPrice, markerCurrency) {
@@ -451,11 +498,14 @@
     buildSearchPayload,
     extractMarkerCurrencies,
     createAllowedItemMap,
+    localizeResultNames,
+    localizeTabName,
     collectAllowedHoldings,
     parsePoeNinjaPrices,
     hasUsablePriceCache,
     isPriceCacheFresh,
     minimumToExalted,
+    valuesFromExalted,
     buildResult,
     parseRateLimitHeaders,
     rateLimitWaitMs,
@@ -468,12 +518,16 @@
 
   const core = globalThis.Poe2WealthCore;
   const API_ROOT = "https://www.pathofexile.com/api/trade2";
+  const KOREAN_STATIC_URL =
+    "https://poe.kakaogames.com/api/trade2/data/static?realm=poe2";
   const POE_NINJA_ROOT = "https://poe.ninja/poe2/api/economy/exchange/current/overview";
   const STATE_KEY = "poe2CurrencyWealthUserscriptStateV5";
   const CACHE_KEY = "poe2CurrencyWealthUserscriptPoeNinjaCacheV1";
   const PRICE_CACHE_TTL = 30 * 60 * 1000;
   let nextRequestAt = 0;
   let staticGroups = [];
+  let localizedStaticGroups = [];
+  let renderedResult = null;
 
   const style = document.createElement("style");
   style.textContent = `
@@ -492,8 +546,9 @@
     .pw-button.secondary{background:#252a32;color:#ddd}.pw-summary{display:grid;grid-template-columns:repeat(4,1fr)}
     .pw-card{border:1px solid #2d323b;border-radius:10px;background:#0d1015;padding:16px}.pw-card span{color:#9198a4;font-size:12px}.pw-card strong{display:block;margin-top:8px;font-size:23px;color:#e4b46e}
     .pw-status{margin-top:12px;color:#cdb58f;white-space:pre-wrap}.pw-error{color:#fca5a5}.pw-warning{color:#f5d08a}
-    .pw-table{width:100%;border-collapse:collapse;margin-top:12px}.pw-table th,.pw-table td{padding:10px;border-bottom:1px solid #292e36;text-align:left}.pw-table th{color:#8f96a2;font-size:11px}.pw-table .num{text-align:right}
+    .pw-table{width:100%;border-collapse:collapse;margin-top:12px}.pw-table th,.pw-table td{padding:10px;border-bottom:1px solid #292e36;text-align:left;vertical-align:top}.pw-table th{color:#8f96a2;font-size:11px}.pw-table .num{text-align:right}.pw-currency-values{white-space:pre-line;line-height:1.45;font-size:11px;color:#d8dbe0}
     .pw-breakdowns{display:grid;grid-template-columns:1fr 1fr;gap:14px}.pw-row{justify-content:space-between;padding:8px 0;border-bottom:1px solid #292e36}
+    .pw-tab-row{cursor:pointer}.pw-tab-row:hover{color:#efbd77}.pw-table-controls{display:flex;align-items:center;justify-content:space-between;gap:12px}.pw-table-controls select{width:min(320px,100%);height:38px;border:1px solid #383e48;border-radius:7px;background:#0b0e12;color:#fff;padding:0 10px}
     .pw-check{display:flex!important;grid-auto-flow:column;align-items:center;justify-content:start}.pw-check input{width:16px;height:16px}
     @media(max-width:850px){.pw-summary,.pw-breakdowns{grid-template-columns:1fr 1fr}}
   `;
@@ -520,17 +575,17 @@
       <div class="pw-status" data-status>모든 요청과 저장은 이 브라우저에서만 처리됩니다.</div>
       <section data-results hidden>
         <div class="pw-panel pw-summary">
-          <article class="pw-card"><span>Divine Orb</span><strong data-total-divine>-</strong></article>
-          <article class="pw-card"><span>Exalted Orb</span><strong data-total-exalted>-</strong></article>
-          <article class="pw-card"><span>Chaos Orb</span><strong data-total-chaos>-</strong></article>
-          <article class="pw-card"><span>Orb of Annulment</span><strong data-total-annul>-</strong></article>
+          <article class="pw-card"><span>디바인 오브</span><strong data-total-divine>-</strong></article>
+          <article class="pw-card"><span>엑잘티드 오브</span><strong data-total-exalted>-</strong></article>
+          <article class="pw-card"><span>카오스 오브</span><strong data-total-chaos>-</strong></article>
+          <article class="pw-card"><span>소멸의 오브</span><strong data-total-annul>-</strong></article>
         </div>
         <div class="pw-breakdowns">
           <section class="pw-panel"><h2>카테고리별</h2><div data-categories></div></section>
           <section class="pw-panel"><h2>탭별</h2><div data-tabs></div></section>
         </div>
         <section class="pw-panel">
-          <h2>가치가 높은 화폐성 아이템</h2>
+          <div class="pw-table-controls"><h2>가치가 높은 화폐성 아이템</h2><select data-tab-filter aria-label="창고 탭 선택"><option value="">모든 창고 탭</option></select></div>
           <table class="pw-table"><thead><tr><th>아이템</th><th>탭</th><th class="num">수량</th><th class="num">개당</th><th class="num">가치</th></tr></thead><tbody data-items></tbody></table>
         </section>
       </section>
@@ -556,13 +611,15 @@
     totalAnnul: $("[data-total-annul]"),
     categories: $("[data-categories]"),
     tabs: $("[data-tabs]"),
-    items: $("[data-items]")
+    items: $("[data-items]"),
+    tabFilter: $("[data-tab-filter]")
   };
 
   launcher.addEventListener("click", () => overlay.classList.add("open"));
   $("[data-close]").addEventListener("click", () => overlay.classList.remove("open"));
   $("[data-detect]").addEventListener("click", detectAccount);
   ui.sync.addEventListener("click", () => synchronize().catch(showError));
+  ui.tabFilter.addEventListener("change", () => renderItems());
 
   initialize().catch(showError);
 
@@ -572,7 +629,11 @@
     );
     const leagues = await apiRequest(`${API_ROOT}/data/leagues`);
     const staticData = await apiRequest(`${API_ROOT}/data/static?realm=poe2`);
+    const localizedStaticResponse = await gmRequest(KOREAN_STATIC_URL, {}).catch(
+      () => null
+    );
     staticGroups = staticData.result || [];
+    localizedStaticGroups = localizedStaticResponse?.data?.result || [];
     ui.markerCurrency.replaceChildren(
       ...core.MARKER_CURRENCIES.map((currency) => option(currency.id, currency.label))
     );
@@ -590,7 +651,9 @@
       ui.markerCurrency.value = state.markerCurrency || "mirror";
       ui.minimum.value = String(state.minimumValue ?? 0);
       ui.minimumCurrency.value = state.minimumCurrency || "exalted";
-      if (state.result) render(state.result);
+      if (state.result) {
+        render(core.localizeResultNames(state.result, localizedStaticGroups));
+      }
     }
     if (!ui.account.value) detectAccount();
   }
@@ -622,7 +685,10 @@
     ui.sync.disabled = true;
     setStatus("정확한 표식 가격으로 공개 창고를 검색하는 중입니다.");
     try {
-      const allowedItems = core.createAllowedItemMap(staticGroups);
+      const allowedItems = core.createAllowedItemMap(
+        staticGroups,
+        localizedStaticGroups
+      );
       const searchResults = await searchAssetPartitions(settings);
       const ids = searchResults.ids;
       if (!ids.length) throw new Error("표식 가격과 정확히 일치하는 항목이 없습니다.");
@@ -822,40 +888,85 @@
   }
 
   function render(result) {
+    renderedResult = result;
     ui.results.hidden = false;
-    ui.totalDivine.textContent = `${format(result.totals.divine)} d`;
-    ui.totalExalted.textContent = `${format(result.totals.exalted)} ex`;
-    ui.totalChaos.textContent = `${format(result.totals.chaos)} c`;
-    ui.totalAnnul.textContent = `${format(result.totals.annul)} annul`;
-    renderBreakdown(ui.categories, result.categories);
-    renderBreakdown(ui.tabs, result.tabs);
+    ui.totalDivine.textContent = `${format(result.totals.divine)} 딥`;
+    ui.totalExalted.textContent = `${format(result.totals.exalted)} 엑잘`;
+    ui.totalChaos.textContent = `${format(result.totals.chaos)} 카오스`;
+    ui.totalAnnul.textContent = `${format(result.totals.annul)} 소멸`;
+    renderBreakdown(ui.categories, result.categories, false);
+    renderBreakdown(ui.tabs, result.tabs, true);
+    populateTabFilter(result.visibleItems);
+    renderItems();
+  }
+
+  function populateTabFilter(items) {
+    const current = ui.tabFilter.value;
+    const tabs = [...new Set(items.map((item) => item.tabName))].sort((a, b) =>
+      core.localizeTabName(a).localeCompare(core.localizeTabName(b), "ko")
+    );
+    ui.tabFilter.replaceChildren(
+      option("", "모든 창고 탭"),
+      ...tabs.map((tabName) => option(tabName, core.localizeTabName(tabName)))
+    );
+    ui.tabFilter.value = tabs.includes(current) ? current : "";
+  }
+
+  function renderItems() {
+    if (!renderedResult) return;
+    const selectedTab = ui.tabFilter.value;
     ui.items.replaceChildren(
-      ...result.visibleItems.map((item) => {
+      ...renderedResult.visibleItems
+        .filter((item) => !selectedTab || item.tabName === selectedTab)
+        .map((item) => {
         const row = document.createElement("tr");
         row.innerHTML = `<td></td><td></td><td class="num"></td><td class="num"></td><td class="num"></td>`;
         row.children[0].textContent = item.name;
-        row.children[1].textContent = item.tabName;
+        row.children[1].textContent = core.localizeTabName(item.tabName);
         row.children[2].textContent = item.quantity.toLocaleString();
-        row.children[3].textContent = `${format(item.unitExalted)} ex`;
-        row.children[4].textContent = `${format(item.totalExalted)} ex`;
+        row.children[3].classList.add("pw-currency-values");
+        row.children[4].classList.add("pw-currency-values");
+        row.children[3].textContent = formatAllValues(
+          item.unitExalted,
+          renderedResult.rates
+        );
+        row.children[4].textContent = formatAllValues(
+          item.totalExalted,
+          renderedResult.rates
+        );
         return row;
       })
     );
   }
 
-  function renderBreakdown(container, rows) {
+  function renderBreakdown(container, rows, isTabs) {
     container.replaceChildren(
       ...rows.map((entry) => {
         const row = document.createElement("div");
-        row.className = "pw-row";
+        row.className = `pw-row${isTabs ? " pw-tab-row" : ""}`;
         const name = document.createElement("span");
-        name.textContent = entry.name;
+        name.textContent = isTabs ? core.localizeTabName(entry.name) : entry.name;
         const value = document.createElement("strong");
-        value.textContent = `${format(entry.totalExalted)} ex`;
+        value.className = "pw-currency-values";
+        value.textContent = formatAllValues(entry.totalExalted, renderedResult.rates);
         row.append(name, value);
+        if (isTabs) {
+          row.title = "이 탭의 아이템만 보기";
+          row.addEventListener("click", () => {
+            ui.tabFilter.value = entry.name;
+            renderItems();
+          });
+        }
         return row;
       })
     );
+  }
+
+  function formatAllValues(exaltedValue, rates) {
+    const values = core.valuesFromExalted(exaltedValue, rates);
+    return core.DISPLAY_CURRENCIES.map(
+      (currency) => `${format(values[currency.id])} ${currency.short}`
+    ).join("\n");
   }
 
   function setStatus(message, type = "") {
