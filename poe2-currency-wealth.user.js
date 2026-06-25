@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         POE2 공개 창고 화폐 자산 계산기
 // @namespace    https://poe2.kr/
-// @version      0.5.0
+// @version      0.6.0
 // @description  정확한 탭 표식 가격으로 공개 창고의 화폐성 자산을 로컬에서 계산합니다.
 // @match        https://www.pathofexile.com/trade2/*
 // @match        https://www.pathofexile.com/ko/trade2/*
@@ -251,13 +251,24 @@
         storageGroup:
           item.storageGroup || storageGroupForItem(item, result.priceGroups)
       }));
-    const visibleItems = localizeItems(result.visibleItems);
+    const pricedItems = localizeItems(
+      result.pricedItems || result.visibleItems
+    );
+    const visibleIds = new Set(
+      (result.visibleItems || []).map(
+        (item) => `${item.tradeId}\u0000${item.tabName}`
+      )
+    );
+    const visibleItems = pricedItems.filter((item) =>
+      visibleIds.has(`${item.tradeId}\u0000${item.tabName}`)
+    );
     const unpricedItems = localizeItems(result.unpricedItems);
     return {
       ...result,
+      pricedItems,
       visibleItems,
       unpricedItems,
-      storageGroups: summarize(visibleItems, "storageGroup")
+      storageGroups: summarize(pricedItems, "storageGroup")
     };
   }
 
@@ -326,6 +337,7 @@
   function parsePoeNinjaPrices(overviews) {
     const prices = { exalted: 1 };
     const priceGroups = {};
+    const marketMeta = {};
     let exaltedPerDivine = null;
     const lineMaps = [];
 
@@ -335,10 +347,38 @@
         exaltedPerDivine = overviewRate;
       }
       const priceType = overview?.priceType;
+      const itemMetadata = new Map(
+        [...(overview?.items || []), ...(overview?.core?.items || [])].map(
+          (item) => [item.id, item]
+        )
+      );
+      const volumes = (overview?.lines || [])
+        .map((line) => Number(line?.volumePrimaryValue))
+        .filter((value) => Number.isFinite(value) && value >= 0)
+        .sort((left, right) => left - right);
+      const lowVolumeThreshold = percentile(volumes, 0.25);
       lineMaps.push(new Map((overview?.lines || []).map((line) => [line.id, line])));
       for (const line of overview?.lines || []) {
         if (line.id && priceType && STORAGE_GROUP_LABELS[priceType]) {
           priceGroups[line.id] = STORAGE_GROUP_LABELS[priceType];
+        }
+        if (line.id) {
+          const item = itemMetadata.get(line.id);
+          const volume = Number(line?.volumePrimaryValue);
+          const change = Number(line?.sparkline?.totalChange);
+          marketMeta[line.id] = {
+            priceType: priceType || null,
+            volume: Number.isFinite(volume) ? volume : null,
+            change7d: Number.isFinite(change) ? change : null,
+            lowVolume:
+              Number.isFinite(volume) &&
+              Number.isFinite(lowVolumeThreshold) &&
+              volume <= lowVolumeThreshold,
+            volatile: Number.isFinite(change) && Math.abs(change) >= 20,
+            image: item?.image
+              ? new URL(item.image, "https://poe.ninja").href
+              : ""
+          };
         }
       }
     }
@@ -361,6 +401,7 @@
     return {
       prices,
       priceGroups,
+      marketMeta,
       rates: {
         exalted: 1,
         chaos: prices.chaos || null,
@@ -396,9 +437,15 @@
     const minimumExalted = minimumToExalted(minimumValue, minimumCurrency, rates);
     const valuedItems = holdings.map((holding) => {
       const unitExalted = prices[holding.tradeId];
+      const market = metadata.marketMeta?.[holding.tradeId] || {};
       return {
         ...holding,
         storageGroup: storageGroupForItem(holding, metadata.priceGroups),
+        image: holding.image || market.image || "",
+        market,
+        priceSource: metadata.priceSources?.[holding.tradeId] || "poe.ninja",
+        marketUnitExalted:
+          metadata.basePrices?.[holding.tradeId] ?? unitExalted ?? null,
         unitExalted,
         totalExalted:
           Number.isFinite(unitExalted) && unitExalted > 0
@@ -407,16 +454,18 @@
       };
     });
 
-    const visibleItems = valuedItems
-      .filter(
-        (item) =>
-          item.totalExalted !== null && item.totalExalted >= minimumExalted
-      )
+    const pricedItems = valuedItems
+      .filter((item) => item.totalExalted !== null)
       .sort((left, right) => right.totalExalted - left.totalExalted);
+    const visibleItems = pricedItems
+      .filter(
+        (item) => item.totalExalted >= minimumExalted
+      )
+      .slice();
     const unpricedItems = valuedItems
       .filter((item) => item.totalExalted === null)
       .sort((left, right) => left.name.localeCompare(right.name));
-    const totalExalted = visibleItems.reduce(
+    const totalExalted = pricedItems.reduce(
       (sum, item) => sum + item.totalExalted,
       0
     );
@@ -425,8 +474,11 @@
       syncedAt: new Date().toISOString(),
       priceUpdatedAt: metadata.priceUpdatedAt || null,
       usedStalePrices: Boolean(metadata.usedStalePrices),
+      staleCategories: metadata.staleCategories || [],
       warnings: metadata.warnings || [],
       priceGroups: metadata.priceGroups || {},
+      marketMeta: metadata.marketMeta || {},
+      basePrices: metadata.basePrices || {},
       rates,
       minimumValue,
       minimumCurrency,
@@ -438,16 +490,175 @@
           rates[currency.id] ? totalExalted / rates[currency.id] : null
         ])
       ),
-      totalStackCount: visibleItems.reduce(
+      totalStackCount: pricedItems.reduce(
         (sum, item) => sum + item.stackCount,
         0
       ),
+      pricedItems,
       visibleItems,
       unpricedItems,
-      categories: summarize(visibleItems, "category"),
-      tabs: summarize(visibleItems, "tabName"),
-      storageGroups: summarize(visibleItems, "storageGroup")
+      categories: summarize(pricedItems, "category"),
+      tabs: summarize(pricedItems, "tabName"),
+      storageGroups: summarize(pricedItems, "storageGroup"),
+      lowVolumeCount: pricedItems.filter((item) => item.market?.lowVolume).length,
+      volatileCount: pricedItems.filter((item) => item.market?.volatile).length
     };
+  }
+
+  function applyPriceOverrides(prices, overrides, rates) {
+    const merged = { ...(prices || {}) };
+    const priceSources = {};
+    for (const [tradeId, override] of Object.entries(overrides || {})) {
+      const value = Number(override?.value);
+      const rate = Number(rates?.[override?.currency]);
+      if (value > 0 && rate > 0) {
+        merged[tradeId] = value * rate;
+        priceSources[tradeId] = "직접 지정";
+      }
+    }
+    return { prices: merged, priceSources };
+  }
+
+  function createSnapshot(result, context = {}) {
+    const items = (result?.pricedItems || result?.visibleItems || []).map((item) => ({
+      tradeId: item.tradeId,
+      name: item.name,
+      storageGroup: item.storageGroup,
+      quantity: item.quantity,
+      unitExalted: item.unitExalted,
+      totalExalted: item.totalExalted
+    }));
+    return {
+      id: context.id || new Date().toISOString(),
+      createdAt: context.createdAt || new Date().toISOString(),
+      accountName: context.accountName || "",
+      league: context.league || "",
+      totalExalted: result?.totalExalted || 0,
+      storageGroups: result?.storageGroups || [],
+      items
+    };
+  }
+
+  function appendHistory(history, snapshot, limit = 90) {
+    return [...(history || []), snapshot].slice(-Math.max(1, limit));
+  }
+
+  function compareSnapshots(previous, current) {
+    if (!previous || !current) return null;
+    const previousItems = new Map(
+      (previous.items || []).map((item) => [item.tradeId, item])
+    );
+    const currentItems = new Map(
+      (current.items || []).map((item) => [item.tradeId, item])
+    );
+    const tradeIds = new Set([...previousItems.keys(), ...currentItems.keys()]);
+    let quantityChangeExalted = 0;
+    let priceChangeExalted = 0;
+    const newItems = [];
+    const depletedItems = [];
+
+    for (const tradeId of tradeIds) {
+      const before = previousItems.get(tradeId);
+      const after = currentItems.get(tradeId);
+      const beforeQuantity = Number(before?.quantity) || 0;
+      const afterQuantity = Number(after?.quantity) || 0;
+      const beforeUnit = Number(before?.unitExalted) || 0;
+      const afterUnit = Number(after?.unitExalted) || 0;
+      if (!before && after) {
+        quantityChangeExalted += afterQuantity * afterUnit;
+        newItems.push(after);
+        continue;
+      }
+      if (before && !after) {
+        quantityChangeExalted -= beforeQuantity * beforeUnit;
+        depletedItems.push(before);
+        continue;
+      }
+      quantityChangeExalted += (afterQuantity - beforeQuantity) * beforeUnit;
+      priceChangeExalted += afterQuantity * (afterUnit - beforeUnit);
+    }
+
+    return {
+      totalChangeExalted:
+        (Number(current.totalExalted) || 0) -
+        (Number(previous.totalExalted) || 0),
+      quantityChangeExalted,
+      priceChangeExalted,
+      newItems,
+      depletedItems
+    };
+  }
+
+  function toCsv(result, displayCurrency = "exalted", liquidationRate = 1) {
+    const currency =
+      DISPLAY_CURRENCIES.find((entry) => entry.id === displayCurrency) ||
+      DISPLAY_CURRENCIES[0];
+    const rate = Number(result?.rates?.[currency.id]) || 1;
+    const rows = [
+      [
+        "아이템",
+        "보관함 종류",
+        "수량",
+        `개당 가치(${currency.short})`,
+        `총가치(${currency.short})`,
+        "가격 출처",
+        "거래량",
+        "7일 변동률",
+        "시세 상태"
+      ]
+    ];
+    for (const item of result?.pricedItems || result?.visibleItems || []) {
+      const statuses = [
+        item.market?.lowVolume ? "거래량 낮음" : "",
+        item.market?.volatile ? "가격 변동 큼" : ""
+      ].filter(Boolean);
+      rows.push([
+        item.name,
+        item.storageGroup,
+        item.quantity,
+        (item.unitExalted / rate) * liquidationRate,
+        (item.totalExalted / rate) * liquidationRate,
+        item.priceSource,
+        item.market?.volume ?? "",
+        item.market?.change7d ?? "",
+        statuses.join(", ")
+      ]);
+    }
+    return rows
+      .map((row) => row.map(csvCell).join(","))
+      .join("\n");
+  }
+
+  function summaryText(result, displayCurrency = "exalted", liquidationRate = 1) {
+    const currency =
+      DISPLAY_CURRENCIES.find((entry) => entry.id === displayCurrency) ||
+      DISPLAY_CURRENCIES[0];
+    const rate = Number(result?.rates?.[currency.id]) || 1;
+    const total = ((result?.totalExalted || 0) / rate) * liquidationRate;
+    const groups = (result?.storageGroups || [])
+      .map(
+        (group) =>
+          `${group.name} ${formatPlain((group.totalExalted / rate) * liquidationRate)} ${currency.short}`
+      )
+      .join(", ");
+    return `POE2 추적 가능한 자산: ${formatPlain(total)} ${currency.short}\n보관함 종류별: ${groups}\n가격 미확인: ${(result?.unpricedItems || []).length}개`;
+  }
+
+  function percentile(sortedValues, ratio) {
+    if (!sortedValues.length) return null;
+    const index = Math.floor((sortedValues.length - 1) * ratio);
+    return sortedValues[index];
+  }
+
+  function csvCell(value) {
+    const text = String(value ?? "");
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  function formatPlain(value) {
+    return new Intl.NumberFormat("ko-KR", {
+      maximumFractionDigits: value >= 100 ? 0 : value >= 10 ? 1 : 2
+    }).format(value);
   }
 
   function storageGroupForItem(item, priceGroups = {}) {
@@ -565,6 +776,12 @@
     minimumToExalted,
     valuesFromExalted,
     storageGroupForItem,
+    applyPriceOverrides,
+    createSnapshot,
+    appendHistory,
+    compareSnapshots,
+    toCsv,
+    summaryText,
     buildResult,
     parseRateLimitHeaders,
     rateLimitWaitMs,
@@ -586,14 +803,22 @@
   const KOREAN_STATIC_URL =
     "https://poe.kakaogames.com/api/trade2/data/static?realm=poe2";
   const POE_NINJA_ROOT = "https://poe.ninja/poe2/api/economy/exchange/current/overview";
-  const STATE_KEY = "poe2CurrencyWealthUserscriptStateV6";
+  const STATE_KEY = "poe2CurrencyWealthUserscriptStateV7";
   const LEGACY_STATE_KEY = "poe2CurrencyWealthUserscriptStateV5";
-  const CACHE_KEY = "poe2CurrencyWealthUserscriptPoeNinjaCacheV2";
+  const LEGACY_STATE_KEY_V6 = "poe2CurrencyWealthUserscriptStateV6";
+  const CACHE_KEY = "poe2CurrencyWealthUserscriptPoeNinjaCacheV3";
+  const HISTORY_KEY = "poe2CurrencyWealthHistoryV1";
+  const OVERRIDE_KEY = "poe2CurrencyWealthOverridesV1";
   const PRICE_CACHE_TTL = 30 * 60 * 1000;
   let nextRequestAt = 0;
   let staticGroups = [];
   let localizedStaticGroups = [];
   let renderedResult = null;
+  let currentSettings = null;
+  let priceOverrides = {};
+  let assetHistory = [];
+  let lastSearchStats = null;
+  let forcePriceRefreshRequested = false;
 
   const style = document.createElement("style");
   style.textContent = `
@@ -615,6 +840,7 @@
     .pw-table{width:100%;border-collapse:collapse;margin-top:12px}.pw-table th,.pw-table td{padding:12px 10px;border-bottom:1px solid #292e36;text-align:left;vertical-align:middle}.pw-table th{color:#8f96a2;font-size:11px}.pw-table .num{text-align:right}.pw-item-name{display:flex;align-items:center;gap:10px;font-weight:700}.pw-item-name img{width:34px;height:34px;object-fit:contain;flex:0 0 34px}.pw-value{font-size:14px;font-weight:700;color:#e4b46e;white-space:nowrap}
     .pw-groups{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px}.pw-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid #292e36;border-radius:8px;background:#0d1015}
     .pw-group-row{cursor:pointer}.pw-group-row:hover{border-color:#9b6a32;color:#efbd77}.pw-note{margin:6px 0 0;color:#8f96a2;font-size:12px}.pw-table-controls{display:flex;align-items:center;justify-content:space-between;gap:12px}.pw-table-controls select{width:min(320px,100%);height:38px;border:1px solid #383e48;border-radius:7px;background:#0b0e12;color:#fff;padding:0 10px}
+    .pw-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.pw-toolbar input,.pw-toolbar select{height:38px;border:1px solid #383e48;border-radius:7px;background:#0b0e12;color:#fff;padding:0 10px}.pw-toolbar input[type=search]{min-width:220px;flex:1}.pw-alert{border-color:#9d3434!important;background:#2a1114!important;color:#fecaca}.pw-badge{display:inline-block;margin-left:6px;border-radius:999px;background:#3b2a16;color:#f5c57a;padding:2px 7px;font-size:10px}.pw-action{border:1px solid #464d59;border-radius:6px;background:#20252d;color:#ddd;padding:5px 8px;cursor:pointer}.pw-action:hover{border-color:#c38a43}.pw-details{margin-top:12px}.pw-details summary{cursor:pointer;color:#e4b46e;font-weight:700}.pw-unpriced-list,.pw-change-list{display:grid;gap:8px;margin-top:10px}.pw-unpriced-row{display:flex;align-items:center;gap:10px;border-bottom:1px solid #292e36;padding:8px 0}.pw-unpriced-row img{width:30px;height:30px;object-fit:contain}.pw-unpriced-row span:first-of-type{flex:1}.pw-history-chart{display:flex;align-items:end;gap:3px;height:110px;margin-top:14px;border-bottom:1px solid #343944}.pw-history-bar{flex:1;min-width:3px;background:#b67d36;border-radius:3px 3px 0 0}.pw-history-list{display:grid;gap:6px;margin-top:12px}.pw-history-row{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:#bfc4cc}.pw-evidence{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.pw-evidence span{border:1px solid #303640;border-radius:999px;padding:5px 9px;color:#b8bec8;font-size:11px}
     .pw-check{display:flex!important;grid-auto-flow:column;align-items:center;justify-content:start}.pw-check input{width:16px;height:16px}
     @media(max-width:850px){.pw-summary{grid-template-columns:1fr 1fr}.pw-groups{grid-template-columns:1fr 1fr}}
   `;
@@ -636,21 +862,33 @@
         <label class="pw-value-field">탭 표식 가격<div class="pw-inline"><input data-marker-price type="number" min="0.0001" step="any" value="1"><select data-marker-currency></select></div></label>
         <label class="pw-value-field">최소 표시 가치<div class="pw-inline"><input data-minimum type="number" min="0" step="0.1" value="0"><select data-minimum-currency></select></div></label>
         <label>가치 표시 단위<select data-display-currency></select></label>
-        <label class="pw-check"><input data-refresh type="checkbox">시세 강제 갱신</label>
+        <label>가치 모드<select data-value-mode><option value="market">기준 가치</option><option value="liquidation">빠른 판매 예상</option></select></label>
+        <label>빠른 판매 비율<input data-liquidation-rate type="number" min="1" max="100" value="80"></label>
+        <button class="pw-button secondary" data-refresh type="button">poe.ninja 데이터 다시 받기</button>
         <button class="pw-button" data-sync>창고 동기화</button>
       </section>
-      <div class="pw-status" data-status>모든 요청과 저장은 이 브라우저에서만 처리됩니다.</div>
+      <div class="pw-status" data-status>poe.ninja 집계 데이터는 실시간 체결가가 아니며 최대 약 1시간 이상 지연될 수 있습니다.</div>
+      <div class="pw-panel pw-alert" data-incomplete hidden>검색 결과 일부가 제한되어 실제 자산보다 적게 계산됐을 수 있습니다.</div>
       <section data-results hidden>
         <div class="pw-panel pw-summary">
           <article class="pw-card"><span>추적 가능한 총자산</span><strong data-total-value>-</strong></article>
           <article class="pw-card"><span>계산된 품목</span><strong data-priced-count>-</strong></article>
           <article class="pw-card"><span>가격 미확인</span><strong data-unpriced-count>-</strong></article>
-          <article class="pw-card"><span>시세 갱신</span><strong data-price-updated>-</strong></article>
+          <article class="pw-card"><span>poe.ninja 데이터 수신 시각</span><strong data-price-updated>-</strong></article>
         </div>
+        <div class="pw-evidence" data-evidence></div>
         <section class="pw-panel"><h2>보관함 종류별 자산</h2><p class="pw-note">실제 탭 이름이 아니라 아이템 종류를 기준으로 자동 분류합니다.</p><div class="pw-groups" data-storage-groups></div></section>
         <section class="pw-panel">
           <div class="pw-table-controls"><h2>가치가 높은 화폐성 아이템</h2><select data-group-filter aria-label="보관함 종류 선택"><option value="">모든 보관함 종류</option></select></div>
-          <table class="pw-table"><thead><tr><th>아이템</th><th>보관함 종류</th><th class="num">수량</th><th class="num">개당 가치</th><th class="num">총가치</th></tr></thead><tbody data-items></tbody></table>
+          <div class="pw-toolbar"><input data-item-search type="search" placeholder="아이템 이름 검색"><select data-sort><option value="total">총가치 높은 순</option><option value="unit">개당 가치 높은 순</option><option value="quantity">수량 높은 순</option><option value="name">이름순</option></select><select data-market-filter><option value="">모든 시세 상태</option><option value="low">거래량 낮음</option><option value="volatile">가격 변동 큼</option><option value="override">직접 지정</option></select><button class="pw-action" data-export-csv>CSV</button><button class="pw-action" data-copy-summary>요약 복사</button></div>
+          <table class="pw-table"><thead><tr><th>아이템</th><th>보관함 종류</th><th class="num">수량</th><th class="num">개당 가치</th><th class="num">총가치</th><th>상태/설정</th></tr></thead><tbody data-items></tbody></table>
+          <details class="pw-details"><summary>가격 미확인 품목 <span data-unpriced-inline>0</span>개</summary><div class="pw-unpriced-list" data-unpriced-list></div></details>
+        </section>
+        <section class="pw-panel">
+          <div class="pw-table-controls"><h2>자산 변동 기록</h2><div><button class="pw-action" data-delete-history>전체 삭제</button></div></div>
+          <div class="pw-history-chart" data-history-chart></div>
+          <div class="pw-change-list" data-change-summary></div>
+          <div class="pw-history-list" data-history-list></div>
         </section>
       </section>
     </main>
@@ -666,6 +904,8 @@
     minimum: $("[data-minimum]"),
     minimumCurrency: $("[data-minimum-currency]"),
     displayCurrency: $("[data-display-currency]"),
+    valueMode: $("[data-value-mode]"),
+    liquidationRate: $("[data-liquidation-rate]"),
     refresh: $("[data-refresh]"),
     sync: $("[data-sync]"),
     status: $("[data-status]"),
@@ -674,20 +914,57 @@
     pricedCount: $("[data-priced-count]"),
     unpricedCount: $("[data-unpriced-count]"),
     priceUpdated: $("[data-price-updated]"),
+    incomplete: $("[data-incomplete]"),
+    evidence: $("[data-evidence]"),
     storageGroups: $("[data-storage-groups]"),
     items: $("[data-items]"),
-    groupFilter: $("[data-group-filter]")
+    groupFilter: $("[data-group-filter]"),
+    itemSearch: $("[data-item-search]"),
+    sort: $("[data-sort]"),
+    marketFilter: $("[data-market-filter]"),
+    exportCsv: $("[data-export-csv]"),
+    copySummary: $("[data-copy-summary]"),
+    unpricedInline: $("[data-unpriced-inline]"),
+    unpricedList: $("[data-unpriced-list]"),
+    historyChart: $("[data-history-chart]"),
+    changeSummary: $("[data-change-summary]"),
+    historyList: $("[data-history-list]"),
+    deleteHistory: $("[data-delete-history]")
   };
 
   launcher.addEventListener("click", () => overlay.classList.add("open"));
   $("[data-close]").addEventListener("click", () => overlay.classList.remove("open"));
   $("[data-detect]").addEventListener("click", detectAccount);
   ui.sync.addEventListener("click", () => synchronize().catch(showError));
+  ui.refresh.addEventListener("click", () => {
+    forcePriceRefreshRequested = true;
+    ui.refresh.textContent = "다음 동기화에서 다시 받음";
+  });
   ui.groupFilter.addEventListener("change", () => renderItems());
+  ui.itemSearch.addEventListener("input", () => renderItems());
+  ui.sort.addEventListener("change", () => {
+    renderItems();
+    persistViewSettings().catch(showError);
+  });
+  ui.marketFilter.addEventListener("change", () => renderItems());
   ui.displayCurrency.addEventListener("change", () => {
     render(renderedResult);
-    persistDisplayCurrency().catch(showError);
+    persistViewSettings().catch(showError);
   });
+  ui.valueMode.addEventListener("change", () => {
+    render(renderedResult);
+    persistViewSettings().catch(showError);
+  });
+  ui.liquidationRate.addEventListener("change", () => {
+    ui.liquidationRate.value = String(
+      Math.max(1, Math.min(100, Number(ui.liquidationRate.value) || 80))
+    );
+    render(renderedResult);
+    persistViewSettings().catch(showError);
+  });
+  ui.exportCsv.addEventListener("click", exportCsv);
+  ui.copySummary.addEventListener("click", copySummary);
+  ui.deleteHistory.addEventListener("click", () => clearHistory().catch(showError));
 
   initialize().catch(showError);
 
@@ -716,8 +993,12 @@
 
     const state =
       (await GM_getValue(STATE_KEY, null)) ||
+      (await GM_getValue(LEGACY_STATE_KEY_V6, null)) ||
       (await GM_getValue(LEGACY_STATE_KEY, null));
+    priceOverrides = await GM_getValue(OVERRIDE_KEY, {});
+    assetHistory = await GM_getValue(HISTORY_KEY, {});
     if (state) {
+      currentSettings = state;
       ui.account.value = core.normalizeTradeAccountName(state.accountName);
       ui.league.value = state.league || ui.league.value;
       ui.markerPrice.value = String(state.markerPrice ?? 1);
@@ -725,8 +1006,16 @@
       ui.minimum.value = String(state.minimumValue ?? 0);
       ui.minimumCurrency.value = state.minimumCurrency || "exalted";
       ui.displayCurrency.value = state.displayCurrency || "exalted";
+      ui.valueMode.value = state.valueMode || "market";
+      ui.liquidationRate.value = String(state.liquidationRate ?? 80);
+      ui.sort.value = state.sort || "total";
       if (state.result) {
-        render(core.localizeResultNames(state.result, localizedStaticGroups));
+        renderedResult = core.localizeResultNames(
+          state.result,
+          localizedStaticGroups
+        );
+        lastSearchStats = renderedResult.searchStats || null;
+        render(renderedResult);
       }
     }
     if (!ui.account.value) detectAccount();
@@ -751,7 +1040,13 @@
       minimumValue: Math.max(0, Number(ui.minimum.value) || 0),
       minimumCurrency: ui.minimumCurrency.value,
       displayCurrency: ui.displayCurrency.value,
-      forcePriceRefresh: ui.refresh.checked
+      valueMode: ui.valueMode.value,
+      liquidationRate: Math.max(
+        1,
+        Math.min(100, Number(ui.liquidationRate.value) || 80)
+      ),
+      sort: ui.sort.value,
+      forcePriceRefresh: forcePriceRefreshRequested
     };
     ui.account.value = settings.accountName;
     if (!settings.accountName) throw new Error("계정명을 입력하세요.");
@@ -791,23 +1086,49 @@
         settings.forcePriceRefresh
       );
       if (priceResult.usedStalePrices) {
-        warnings.push("poe.ninja 조회 실패로 저장된 이전 시세를 사용했습니다.");
+        warnings.push(
+          `poe.ninja 일부 카테고리 조회 실패로 이전 데이터를 사용했습니다: ${priceResult.staleCategories.join(", ")}`
+        );
       }
+      const overridden = core.applyPriceOverrides(
+        priceResult.prices,
+        priceOverrides,
+        priceResult.rates
+      );
       const result = core.buildResult(
         holdings,
-        priceResult.prices,
+        overridden.prices,
         priceResult.rates,
         settings.minimumValue,
         settings.minimumCurrency,
         {
           priceUpdatedAt: priceResult.updatedAt,
           usedStalePrices: priceResult.usedStalePrices,
+          staleCategories: priceResult.staleCategories,
           priceGroups: priceResult.priceGroups,
+          marketMeta: priceResult.marketMeta,
+          priceSources: overridden.priceSources,
+          basePrices: priceResult.prices,
           warnings
         }
       );
+      result.searchStats = searchResults.stats;
+      currentSettings = settings;
+      lastSearchStats = searchResults.stats;
+      const historyKey = historyScopeKey(settings);
+      const previousHistory = assetHistory[historyKey] || [];
+      assetHistory = {
+        ...assetHistory,
+        [historyKey]: core.appendHistory(
+          previousHistory,
+          core.createSnapshot(result, settings),
+          90
+        )
+      };
+      await GM_setValue(HISTORY_KEY, assetHistory);
       await GM_setValue(STATE_KEY, { ...settings, forcePriceRefresh: false, result });
-      ui.refresh.checked = false;
+      forcePriceRefreshRequested = false;
+      ui.refresh.textContent = "poe.ninja 데이터 다시 받기";
       render(result);
       setStatus(
         warnings.length ? `완료\n${warnings.join("\n")}` : "동기화 완료",
@@ -821,75 +1142,154 @@
   async function searchAssetPartitions(settings) {
     const ids = new Set();
     const warnings = [];
+    let incomplete = false;
+    let requestCount = 0;
     for (let index = 0; index < core.ASSET_SEARCH_PARTITIONS.length; index += 1) {
       const partition = core.ASSET_SEARCH_PARTITIONS[index];
       setStatus(
         `화폐성 아이템 분할 검색 ${index + 1} / ${core.ASSET_SEARCH_PARTITIONS.length}`
       );
-      const search = await apiRequest(
-        `${API_ROOT}/search/poe2/${encodeURIComponent(settings.league)}`,
-        {
-          method: "POST",
-          body: JSON.stringify(
-            core.buildSearchPayload(
-              settings.accountName,
-              settings.markerPrice,
-              settings.markerCurrency,
-              partition
-            )
-          )
-        }
-      );
-      const partitionIds = search.result || [];
-      partitionIds.forEach((id) => ids.add(id));
-      if (Number(search.total) > partitionIds.length) {
-        warnings.push(
-          `${partition.category} ${search.total}개 중 ${partitionIds.length}개만 수집`
-        );
-      }
+      const outcome = await searchPartition(settings, partition, 0);
+      requestCount += outcome.requestCount;
+      outcome.ids.forEach((id) => ids.add(id));
+      warnings.push(...outcome.warnings);
+      incomplete ||= outcome.incomplete;
     }
-    return { ids: [...ids], warnings };
+    return {
+      ids: [...ids],
+      warnings,
+      stats: {
+        resultIds: ids.size,
+        requestCount,
+        incomplete
+      }
+    };
+  }
+
+  async function searchPartition(settings, partition, depth) {
+    const search = await apiRequest(
+      `${API_ROOT}/search/poe2/${encodeURIComponent(settings.league)}`,
+      {
+        method: "POST",
+        body: JSON.stringify(
+          core.buildSearchPayload(
+            settings.accountName,
+            settings.markerPrice,
+            settings.markerCurrency,
+            partition
+          )
+        )
+      }
+    );
+    const partitionIds = Array.isArray(search.result) ? search.result : [];
+    const total = Number(search.total) || partitionIds.length;
+    if (total <= partitionIds.length) {
+      return {
+        ids: partitionIds,
+        warnings: [],
+        incomplete: false,
+        requestCount: 1
+      };
+    }
+
+    const minimum = Number(partition.stackMin);
+    const maximum = Number(partition.stackMax);
+    if (
+      partition.category === "currency" &&
+      Number.isFinite(minimum) &&
+      Number.isFinite(maximum) &&
+      minimum < maximum &&
+      depth < 20
+    ) {
+      const midpoint = Math.floor((minimum + maximum) / 2);
+      const left = await searchPartition(
+        settings,
+        { ...partition, stackMin: minimum, stackMax: midpoint },
+        depth + 1
+      );
+      const right = await searchPartition(
+        settings,
+        { ...partition, stackMin: midpoint + 1, stackMax: maximum },
+        depth + 1
+      );
+      return {
+        ids: [...new Set([...left.ids, ...right.ids])],
+        warnings: [...left.warnings, ...right.warnings],
+        incomplete: left.incomplete || right.incomplete,
+        requestCount: 1 + left.requestCount + right.requestCount
+      };
+    }
+
+    return {
+      ids: partitionIds,
+      warnings: [
+        `${partition.category} 검색 결과 ${total}개 중 ${partitionIds.length}개만 수집`
+      ],
+      incomplete: true,
+      requestCount: 1
+    };
   }
 
   async function loadPoeNinjaPrices(league, forceRefresh) {
     const allCaches = await GM_getValue(CACHE_KEY, {});
-    const cached = allCaches[league] || null;
-    if (!forceRefresh && core.isPriceCacheFresh(cached, Date.now(), PRICE_CACHE_TTL)) {
-      return { ...cached, usedStalePrices: false };
+    const leagueCache = allCaches[league] || { categories: {} };
+    const categories = { ...(leagueCache.categories || {}) };
+    const staleCategories = [];
+    const overviews = [];
+
+    for (let index = 0; index < core.POE_NINJA_PRICE_TYPES.length; index += 1) {
+      const type = core.POE_NINJA_PRICE_TYPES[index];
+      const cachedCategory = categories[type];
+      const cachedAt = new Date(cachedCategory?.updatedAt || 0).getTime();
+      const categoryFresh =
+        !forceRefresh &&
+        cachedCategory?.data &&
+        Date.now() - cachedAt < PRICE_CACHE_TTL;
+      setStatus(
+        `poe.ninja 데이터 ${type} · ${index + 1} / ${core.POE_NINJA_PRICE_TYPES.length}`
+      );
+
+      if (categoryFresh) {
+        overviews.push({ ...cachedCategory.data, priceType: type });
+        continue;
+      }
+
+      try {
+        const data = await ninjaRequest(
+          `${POE_NINJA_ROOT}?league=${encodeURIComponent(league)}&type=${encodeURIComponent(type)}`
+        );
+        categories[type] = {
+          data,
+          updatedAt: new Date().toISOString()
+        };
+        overviews.push({ ...data, priceType: type });
+      } catch (error) {
+        if (!cachedCategory?.data) throw error;
+        staleCategories.push(type);
+        overviews.push({ ...cachedCategory.data, priceType: type });
+      }
     }
 
-    try {
-      const overviews = [];
-      for (let index = 0; index < core.POE_NINJA_PRICE_TYPES.length; index += 1) {
-        const type = core.POE_NINJA_PRICE_TYPES[index];
-        setStatus(`poe.ninja 시세 ${type} · ${index + 1} / ${core.POE_NINJA_PRICE_TYPES.length}`);
-        overviews.push({
-          ...(await ninjaRequest(
-            `${POE_NINJA_ROOT}?league=${encodeURIComponent(league)}&type=${encodeURIComponent(type)}`
-          )),
-          priceType: type
-        });
-      }
-
-      const parsed = core.parsePoeNinjaPrices(overviews);
-      if (!parsed.rates.chaos || !parsed.rates.divine || !parsed.rates.annul) {
-        throw new Error("poe.ninja에서 카오스·딥·소멸 환율을 찾지 못했습니다.");
-      }
-      const fresh = {
-        prices: parsed.prices,
-        priceGroups: parsed.priceGroups,
-        rates: parsed.rates,
-        updatedAt: new Date().toISOString()
-      };
-      allCaches[league] = fresh;
-      await GM_setValue(CACHE_KEY, allCaches);
-      return { ...fresh, usedStalePrices: false };
-    } catch (error) {
-      if (core.hasUsablePriceCache(cached)) {
-        return { ...cached, usedStalePrices: true };
-      }
-      throw error;
+    const parsed = core.parsePoeNinjaPrices(overviews);
+    if (!parsed.rates.chaos || !parsed.rates.divine || !parsed.rates.annul) {
+      throw new Error("poe.ninja에서 카오스·딥·소멸 환율을 찾지 못했습니다.");
     }
+    const updatedAt = Object.values(categories)
+      .map((category) => category.updatedAt)
+      .filter(Boolean)
+      .sort()
+      .at(-1) || new Date().toISOString();
+    allCaches[league] = { categories };
+    await GM_setValue(CACHE_KEY, allCaches);
+    return {
+      prices: parsed.prices,
+      priceGroups: parsed.priceGroups,
+      marketMeta: parsed.marketMeta,
+      rates: parsed.rates,
+      updatedAt,
+      staleCategories,
+      usedStalePrices: staleCategories.length > 0
+    };
   }
 
   async function ninjaRequest(url) {
@@ -970,12 +1370,15 @@
     renderedResult = result;
     ui.results.hidden = false;
     const currency = selectedDisplayCurrency();
+    const multiplier = valueMultiplier();
     ui.totalValue.textContent = formatExaltedValue(
-      result.totalExalted,
+      result.totalExalted * multiplier,
       result.rates,
       currency
     );
-    ui.pricedCount.textContent = result.visibleItems.length.toLocaleString();
+    ui.pricedCount.textContent = (
+      result.pricedItems || result.visibleItems
+    ).length.toLocaleString();
     ui.unpricedCount.textContent = result.unpricedItems.length.toLocaleString();
     ui.priceUpdated.textContent = result.priceUpdatedAt
       ? new Intl.DateTimeFormat("ko-KR", {
@@ -988,6 +1391,9 @@
     renderStorageGroups(result.storageGroups || []);
     populateGroupFilter(result.visibleItems);
     renderItems();
+    renderUnpriced();
+    renderEvidence();
+    renderHistory();
   }
 
   function populateGroupFilter(items) {
@@ -1006,12 +1412,23 @@
     if (!renderedResult) return;
     const selectedGroup = ui.groupFilter.value;
     const currency = selectedDisplayCurrency();
+    const multiplier = valueMultiplier();
+    const query = core.normalizeName(ui.itemSearch.value);
+    const marketFilter = ui.marketFilter.value;
+    const items = [...renderedResult.visibleItems]
+      .filter((item) => !selectedGroup || item.storageGroup === selectedGroup)
+      .filter((item) => !query || core.normalizeName(item.name).includes(query))
+      .filter((item) => {
+        if (marketFilter === "low") return item.market?.lowVolume;
+        if (marketFilter === "volatile") return item.market?.volatile;
+        if (marketFilter === "override") return item.priceSource === "직접 지정";
+        return true;
+      })
+      .sort(itemComparator(ui.sort.value));
     ui.items.replaceChildren(
-      ...renderedResult.visibleItems
-        .filter((item) => !selectedGroup || item.storageGroup === selectedGroup)
-        .map((item) => {
+      ...items.map((item) => {
         const row = document.createElement("tr");
-        row.innerHTML = `<td></td><td></td><td class="num"></td><td class="num"></td><td class="num"></td>`;
+        row.innerHTML = `<td></td><td></td><td class="num"></td><td class="num"></td><td class="num"></td><td></td>`;
         const itemCell = row.children[0];
         itemCell.className = "pw-item-name";
         if (item.image) {
@@ -1027,15 +1444,38 @@
         row.children[3].classList.add("pw-value");
         row.children[4].classList.add("pw-value");
         row.children[3].textContent = formatExaltedValue(
-          item.unitExalted,
+          item.unitExalted * multiplier,
           renderedResult.rates,
           currency
         );
         row.children[4].textContent = formatExaltedValue(
-          item.totalExalted,
+          item.totalExalted * multiplier,
           renderedResult.rates,
           currency
         );
+        const statusCell = row.children[5];
+        if (item.priceSource === "직접 지정") {
+          statusCell.append(badge("직접 지정"));
+        }
+        if (item.market?.lowVolume) statusCell.append(badge("거래량 낮음"));
+        if (item.market?.volatile) statusCell.append(badge("가격 변동 큼"));
+        const priceButton = document.createElement("button");
+        priceButton.className = "pw-action";
+        priceButton.textContent =
+          item.priceSource === "직접 지정" ? "가격 수정" : "직접 가격";
+        priceButton.addEventListener("click", () =>
+          editOverride(item).catch(showError)
+        );
+        statusCell.append(priceButton);
+        if (item.priceSource === "직접 지정") {
+          const resetButton = document.createElement("button");
+          resetButton.className = "pw-action";
+          resetButton.textContent = "초기화";
+          resetButton.addEventListener("click", () =>
+            removeOverride(item.tradeId).catch(showError)
+          );
+          statusCell.append(resetButton);
+        }
         return row;
       })
     );
@@ -1043,6 +1483,7 @@
 
   function renderStorageGroups(rows) {
     const currency = selectedDisplayCurrency();
+    const multiplier = valueMultiplier();
     ui.storageGroups.replaceChildren(
       ...rows.map((entry) => {
         const row = document.createElement("div");
@@ -1052,7 +1493,7 @@
         const value = document.createElement("strong");
         value.className = "pw-value";
         value.textContent = formatExaltedValue(
-          entry.totalExalted,
+          entry.totalExalted * multiplier,
           renderedResult.rates,
           currency
         );
@@ -1080,13 +1521,299 @@
     return `${format(values[currency.id])} ${currency.short}`;
   }
 
-  async function persistDisplayCurrency() {
+  function valueMultiplier() {
+    return ui.valueMode.value === "liquidation"
+      ? Math.max(0.01, Math.min(1, Number(ui.liquidationRate.value) / 100))
+      : 1;
+  }
+
+  function itemComparator(sortMode) {
+    if (sortMode === "unit") {
+      return (left, right) => right.unitExalted - left.unitExalted;
+    }
+    if (sortMode === "quantity") {
+      return (left, right) => right.quantity - left.quantity;
+    }
+    if (sortMode === "name") {
+      return (left, right) => left.name.localeCompare(right.name, "ko");
+    }
+    return (left, right) => right.totalExalted - left.totalExalted;
+  }
+
+  async function persistViewSettings() {
     const state = (await GM_getValue(STATE_KEY, null)) || {};
     await GM_setValue(STATE_KEY, {
       ...state,
       displayCurrency: ui.displayCurrency.value,
+      valueMode: ui.valueMode.value,
+      liquidationRate: Number(ui.liquidationRate.value),
+      sort: ui.sort.value,
       ...(renderedResult ? { result: renderedResult } : {})
     });
+  }
+
+  function renderUnpriced() {
+    const items = renderedResult?.unpricedItems || [];
+    ui.unpricedInline.textContent = items.length.toLocaleString();
+    ui.unpricedList.replaceChildren(
+      ...items.map((item) => {
+        const row = document.createElement("div");
+        row.className = "pw-unpriced-row";
+        if (item.image) {
+          const image = document.createElement("img");
+          image.src = item.image;
+          image.alt = "";
+          row.append(image);
+        }
+        const name = document.createElement("span");
+        name.textContent = `${item.name} · ${item.storageGroup} · ${item.quantity.toLocaleString()}개`;
+        const reason = document.createElement("span");
+        reason.textContent = "poe.ninja 시세 없음";
+        const button = document.createElement("button");
+        button.className = "pw-action";
+        button.textContent = "직접 가격";
+        button.addEventListener("click", () => editOverride(item).catch(showError));
+        row.append(name, reason, button);
+        return row;
+      })
+    );
+  }
+
+  function renderEvidence() {
+    const stats = renderedResult?.searchStats || lastSearchStats || {};
+    const staleCategories = renderedResult?.staleCategories?.length
+      ? `이전 캐시: ${renderedResult.staleCategories.join(", ")}`
+      : "새 데이터/유효 캐시";
+    const values = [
+      `검색 항목 ${stats.resultIds ?? "-"}개`,
+      `계산 품목 ${(renderedResult?.pricedItems || []).length}개`,
+      `가격 미확인 ${(renderedResult?.unpricedItems || []).length}개`,
+      `거래량 낮음 ${renderedResult?.lowVolumeCount || 0}개`,
+      `가격 변동 큼 ${renderedResult?.volatileCount || 0}개`,
+      `시세 출처 ${staleCategories}`
+    ];
+    ui.evidence.replaceChildren(
+      ...values.map((value) => {
+        const item = document.createElement("span");
+        item.textContent = value;
+        return item;
+      })
+    );
+    ui.incomplete.hidden = !stats.incomplete;
+  }
+
+  function renderHistory() {
+    const settings = currentSettings || {};
+    const history = assetHistory[historyScopeKey(settings)] || [];
+    const currency = selectedDisplayCurrency();
+    const rate = Number(renderedResult?.rates?.[currency.id]) || 1;
+    const multiplier = valueMultiplier();
+    const maximum = Math.max(1, ...history.map((item) => item.totalExalted));
+    ui.historyChart.replaceChildren(
+      ...history.map((snapshot) => {
+        const bar = document.createElement("div");
+        bar.className = "pw-history-bar";
+        bar.style.height = `${Math.max(3, (snapshot.totalExalted / maximum) * 100)}%`;
+        bar.title = `${formatDateTime(snapshot.createdAt)} · ${format(
+          (snapshot.totalExalted / rate) * multiplier
+        )} ${currency.short}`;
+        return bar;
+      })
+    );
+
+    const previous = history.at(-2);
+    const current = history.at(-1);
+    const comparison = core.compareSnapshots(previous, current);
+    ui.changeSummary.replaceChildren();
+    if (comparison) {
+      for (const text of [
+        `총자산 변화 ${signedValue(comparison.totalChangeExalted, rate, multiplier, currency)}`,
+        `수량 변화 영향 ${signedValue(comparison.quantityChangeExalted, rate, multiplier, currency)}`,
+        `시세 변화 영향 ${signedValue(comparison.priceChangeExalted, rate, multiplier, currency)}`,
+        `신규 ${comparison.newItems.length}개 · 소진 ${comparison.depletedItems.length}개`
+      ]) {
+        const line = document.createElement("div");
+        line.textContent = text;
+        ui.changeSummary.append(line);
+      }
+    }
+
+    ui.historyList.replaceChildren(
+      ...history
+        .slice(-10)
+        .reverse()
+        .map((snapshot) => {
+          const row = document.createElement("div");
+          row.className = "pw-history-row";
+          const text = document.createElement("span");
+          text.textContent = `${formatDateTime(snapshot.createdAt)} · ${format(
+            (snapshot.totalExalted / rate) * multiplier
+          )} ${currency.short}`;
+          const button = document.createElement("button");
+          button.className = "pw-action";
+          button.textContent = "삭제";
+          button.addEventListener("click", () =>
+            deleteHistoryEntry(snapshot.id).catch(showError)
+          );
+          row.append(text, button);
+          return row;
+        })
+    );
+  }
+
+  async function editOverride(item) {
+    const existing = priceOverrides[item.tradeId];
+    const amount = prompt(
+      `${item.name}의 개당 가격을 입력하세요.`,
+      existing?.value ? String(existing.value) : ""
+    );
+    if (amount === null) return;
+    const value = Number(amount);
+    if (!(value > 0)) throw new Error("직접 가격은 0보다 커야 합니다.");
+    const currency = prompt(
+      "화폐 단위를 입력하세요: exalted, chaos, annul, divine",
+      existing?.currency || ui.displayCurrency.value || "exalted"
+    );
+    if (currency === null) return;
+    if (!core.DISPLAY_CURRENCIES.some((entry) => entry.id === currency)) {
+      throw new Error("화폐 단위는 exalted, chaos, annul, divine 중 하나여야 합니다.");
+    }
+    priceOverrides = {
+      ...priceOverrides,
+      [item.tradeId]: { value, currency }
+    };
+    await GM_setValue(OVERRIDE_KEY, priceOverrides);
+    await rebuildWithOverrides();
+  }
+
+  async function removeOverride(tradeId) {
+    const next = { ...priceOverrides };
+    delete next[tradeId];
+    priceOverrides = next;
+    await GM_setValue(OVERRIDE_KEY, priceOverrides);
+    await rebuildWithOverrides();
+  }
+
+  async function rebuildWithOverrides() {
+    if (!renderedResult) return;
+    const allItems = [
+      ...(renderedResult.pricedItems || renderedResult.visibleItems || []),
+      ...(renderedResult.unpricedItems || [])
+    ];
+    const holdings = allItems.map((item) => ({
+      tradeId: item.tradeId,
+      name: item.name,
+      image: item.image,
+      group: item.group,
+      category: item.category,
+      tabName: item.tabName,
+      quantity: item.quantity,
+      stackCount: item.stackCount
+    }));
+    const basePrices = { ...(renderedResult.basePrices || {}) };
+    for (const item of allItems) {
+      if (item.marketUnitExalted > 0) {
+        basePrices[item.tradeId] = item.marketUnitExalted;
+      }
+    }
+    const overridden = core.applyPriceOverrides(
+      basePrices,
+      priceOverrides,
+      renderedResult.rates
+    );
+    const rebuilt = core.buildResult(
+      holdings,
+      overridden.prices,
+      renderedResult.rates,
+      renderedResult.minimumValue,
+      renderedResult.minimumCurrency,
+      {
+        priceUpdatedAt: renderedResult.priceUpdatedAt,
+        usedStalePrices: renderedResult.usedStalePrices,
+        staleCategories: renderedResult.staleCategories,
+        warnings: renderedResult.warnings,
+        priceGroups: renderedResult.priceGroups,
+        marketMeta: renderedResult.marketMeta,
+        priceSources: overridden.priceSources,
+        basePrices
+      }
+    );
+    rebuilt.searchStats = renderedResult.searchStats;
+    renderedResult = rebuilt;
+    const state = (await GM_getValue(STATE_KEY, null)) || {};
+    await GM_setValue(STATE_KEY, { ...state, result: rebuilt });
+    render(rebuilt);
+  }
+
+  function exportCsv() {
+    if (!renderedResult) return;
+    const csv = core.toCsv(
+      renderedResult,
+      ui.displayCurrency.value,
+      valueMultiplier()
+    );
+    const blob = new Blob([`\ufeff${csv}`], {
+      type: "text/csv;charset=utf-8"
+    });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `poe2-assets-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
+  async function copySummary() {
+    if (!renderedResult) return;
+    await navigator.clipboard.writeText(
+      core.summaryText(
+        renderedResult,
+        ui.displayCurrency.value,
+        valueMultiplier()
+      )
+    );
+    setStatus("자산 요약을 클립보드에 복사했습니다.");
+  }
+
+  async function clearHistory() {
+    const key = historyScopeKey(currentSettings || {});
+    assetHistory = { ...assetHistory, [key]: [] };
+    await GM_setValue(HISTORY_KEY, assetHistory);
+    renderHistory();
+  }
+
+  async function deleteHistoryEntry(id) {
+    const key = historyScopeKey(currentSettings || {});
+    assetHistory = {
+      ...assetHistory,
+      [key]: (assetHistory[key] || []).filter((entry) => entry.id !== id)
+    };
+    await GM_setValue(HISTORY_KEY, assetHistory);
+    renderHistory();
+  }
+
+  function historyScopeKey(settings) {
+    return `${settings.accountName || ""}\u0000${settings.league || ""}`;
+  }
+
+  function badge(text) {
+    const item = document.createElement("span");
+    item.className = "pw-badge";
+    item.textContent = text;
+    return item;
+  }
+
+  function signedValue(exalted, rate, multiplier, currency) {
+    const value = (exalted / rate) * multiplier;
+    return `${value >= 0 ? "+" : ""}${format(value)} ${currency.short}`;
+  }
+
+  function formatDateTime(value) {
+    return new Intl.DateTimeFormat("ko-KR", {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    }).format(new Date(value));
   }
 
   function setStatus(message, type = "") {
