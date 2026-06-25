@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         POE2 공개 창고 화폐 자산 계산기
 // @namespace    https://poe2.kr/
-// @version      0.4.1
+// @version      0.5.0
 // @description  정확한 탭 표식 가격으로 공개 창고의 화폐성 자산을 로컬에서 계산합니다.
 // @match        https://www.pathofexile.com/trade2/*
 // @match        https://www.pathofexile.com/ko/trade2/*
@@ -25,6 +25,8 @@
     "Fragments",
     "Verisium",
     "Runes",
+    "SoulCores",
+    "Idols",
     "Expedition",
     "Vaal",
     "Delirium",
@@ -39,6 +41,8 @@
     Fragments: "조각·파편",
     Verisium: "베리시움",
     Runes: "룬·소켓 재료",
+    SoulCores: "영혼 핵",
+    Idols: "우상",
     Expedition: "탐험 재료",
     Vaal: "바알 재료",
     Delirium: "환영 재료",
@@ -62,8 +66,8 @@
   const DISPLAY_CURRENCIES = [
     { id: "exalted", label: "엑잘티드 오브", short: "엑잘" },
     { id: "chaos", label: "카오스 오브", short: "카오스" },
-    { id: "divine", label: "디바인 오브", short: "딥" },
-    { id: "annul", label: "소멸의 오브", short: "소멸" }
+    { id: "annul", label: "소멸의 오브", short: "소멸" },
+    { id: "divine", label: "디바인 오브", short: "딥" }
   ];
 
   const MARKER_CURRENCIES = [
@@ -100,6 +104,21 @@
     "Breach",
     "Verisium"
   ];
+
+  const STORAGE_GROUP_LABELS = {
+    Currency: "화폐",
+    Fragments: "조각·파편",
+    Breach: "균열",
+    Delirium: "환영",
+    Expedition: "탐험",
+    Essences: "에센스",
+    Ritual: "의식·징조",
+    Abyss: "심연",
+    Runes: "룬",
+    SoulCores: "영혼 핵",
+    Idols: "우상",
+    Verisium: "베리시움"
+  };
 
   function normalizeName(value) {
     return String(value || "")
@@ -228,12 +247,17 @@
     const localizeItems = (items) =>
       (items || []).map((item) => ({
         ...item,
-        name: localizedEntries.get(item.tradeId) || item.name
+        name: localizedEntries.get(item.tradeId) || item.name,
+        storageGroup:
+          item.storageGroup || storageGroupForItem(item, result.priceGroups)
       }));
+    const visibleItems = localizeItems(result.visibleItems);
+    const unpricedItems = localizeItems(result.unpricedItems);
     return {
       ...result,
-      visibleItems: localizeItems(result.visibleItems),
-      unpricedItems: localizeItems(result.unpricedItems)
+      visibleItems,
+      unpricedItems,
+      storageGroups: summarize(visibleItems, "storageGroup")
     };
   }
 
@@ -301,6 +325,7 @@
 
   function parsePoeNinjaPrices(overviews) {
     const prices = { exalted: 1 };
+    const priceGroups = {};
     let exaltedPerDivine = null;
     const lineMaps = [];
 
@@ -309,7 +334,13 @@
       if (overviewRate > 0 && !exaltedPerDivine) {
         exaltedPerDivine = overviewRate;
       }
+      const priceType = overview?.priceType;
       lineMaps.push(new Map((overview?.lines || []).map((line) => [line.id, line])));
+      for (const line of overview?.lines || []) {
+        if (line.id && priceType && STORAGE_GROUP_LABELS[priceType]) {
+          priceGroups[line.id] = STORAGE_GROUP_LABELS[priceType];
+        }
+      }
     }
 
     if (!(exaltedPerDivine > 0)) {
@@ -329,6 +360,7 @@
     prices.divine = exaltedPerDivine;
     return {
       prices,
+      priceGroups,
       rates: {
         exalted: 1,
         chaos: prices.chaos || null,
@@ -366,6 +398,7 @@
       const unitExalted = prices[holding.tradeId];
       return {
         ...holding,
+        storageGroup: storageGroupForItem(holding, metadata.priceGroups),
         unitExalted,
         totalExalted:
           Number.isFinite(unitExalted) && unitExalted > 0
@@ -393,6 +426,7 @@
       priceUpdatedAt: metadata.priceUpdatedAt || null,
       usedStalePrices: Boolean(metadata.usedStalePrices),
       warnings: metadata.warnings || [],
+      priceGroups: metadata.priceGroups || {},
       rates,
       minimumValue,
       minimumCurrency,
@@ -411,8 +445,29 @@
       visibleItems,
       unpricedItems,
       categories: summarize(visibleItems, "category"),
-      tabs: summarize(visibleItems, "tabName")
+      tabs: summarize(visibleItems, "tabName"),
+      storageGroups: summarize(visibleItems, "storageGroup")
     };
+  }
+
+  function storageGroupForItem(item, priceGroups = {}) {
+    if (priceGroups?.[item.tradeId]) return priceGroups[item.tradeId];
+    const fallback = {
+      Currency: "화폐",
+      Fragments: "조각·파편",
+      Vaal: "조각·파편",
+      Breach: "균열",
+      Delirium: "환영",
+      Expedition: "탐험",
+      Essences: "에센스",
+      Ritual: "의식·징조",
+      Abyss: "심연",
+      Runes: "룬",
+      SoulCores: "영혼 핵",
+      Idols: "우상",
+      Verisium: "베리시움"
+    };
+    return fallback[item.group] || item.category || "기타";
   }
 
   function summarize(items, key) {
@@ -495,6 +550,7 @@
     MARKER_CURRENCIES,
     ASSET_SEARCH_PARTITIONS,
     POE_NINJA_PRICE_TYPES,
+    STORAGE_GROUP_LABELS,
     normalizeName,
     normalizeTradeAccountName,
     buildSearchPayload,
@@ -508,6 +564,7 @@
     isPriceCacheFresh,
     minimumToExalted,
     valuesFromExalted,
+    storageGroupForItem,
     buildResult,
     parseRateLimitHeaders,
     rateLimitWaitMs,
@@ -529,8 +586,9 @@
   const KOREAN_STATIC_URL =
     "https://poe.kakaogames.com/api/trade2/data/static?realm=poe2";
   const POE_NINJA_ROOT = "https://poe.ninja/poe2/api/economy/exchange/current/overview";
-  const STATE_KEY = "poe2CurrencyWealthUserscriptStateV5";
-  const CACHE_KEY = "poe2CurrencyWealthUserscriptPoeNinjaCacheV1";
+  const STATE_KEY = "poe2CurrencyWealthUserscriptStateV6";
+  const LEGACY_STATE_KEY = "poe2CurrencyWealthUserscriptStateV5";
+  const CACHE_KEY = "poe2CurrencyWealthUserscriptPoeNinjaCacheV2";
   const PRICE_CACHE_TTL = 30 * 60 * 1000;
   let nextRequestAt = 0;
   let staticGroups = [];
@@ -551,14 +609,14 @@
     .pw-form input,.pw-form select{height:38px;border:1px solid #383e48;border-radius:7px;background:#0b0e12;color:#fff;padding:0 10px}
     .pw-inline{display:flex;gap:7px;min-width:0}.pw-inline input{flex:1;min-width:0}.pw-value-field .pw-inline input{flex:0 0 96px;width:96px;min-width:96px}.pw-value-field .pw-inline select{flex:1;width:auto;min-width:145px}
     .pw-button{height:40px;border:0;border-radius:7px;background:#c38a43;color:#171006;padding:0 16px;font-weight:800;cursor:pointer}
-    .pw-button.secondary{background:#252a32;color:#ddd}.pw-summary{display:grid;grid-template-columns:repeat(4,1fr)}
+    .pw-button.secondary{background:#252a32;color:#ddd}.pw-summary{display:grid;grid-template-columns:1.4fr repeat(3,1fr)}
     .pw-card{border:1px solid #2d323b;border-radius:10px;background:#0d1015;padding:16px}.pw-card span{color:#9198a4;font-size:12px}.pw-card strong{display:block;margin-top:8px;font-size:23px;color:#e4b46e}
     .pw-status{margin-top:12px;color:#cdb58f;white-space:pre-wrap}.pw-error{color:#fca5a5}.pw-warning{color:#f5d08a}
-    .pw-table{width:100%;border-collapse:collapse;margin-top:12px}.pw-table th,.pw-table td{padding:10px;border-bottom:1px solid #292e36;text-align:left;vertical-align:top}.pw-table th{color:#8f96a2;font-size:11px}.pw-table .num{text-align:right}.pw-currency-values{white-space:pre-line;line-height:1.45;font-size:11px;color:#d8dbe0}
-    .pw-breakdowns{display:grid;grid-template-columns:1fr 1fr;gap:14px}.pw-row{justify-content:space-between;padding:8px 0;border-bottom:1px solid #292e36}
-    .pw-tab-row{cursor:pointer}.pw-tab-row:hover{color:#efbd77}.pw-table-controls{display:flex;align-items:center;justify-content:space-between;gap:12px}.pw-table-controls select{width:min(320px,100%);height:38px;border:1px solid #383e48;border-radius:7px;background:#0b0e12;color:#fff;padding:0 10px}
+    .pw-table{width:100%;border-collapse:collapse;margin-top:12px}.pw-table th,.pw-table td{padding:12px 10px;border-bottom:1px solid #292e36;text-align:left;vertical-align:middle}.pw-table th{color:#8f96a2;font-size:11px}.pw-table .num{text-align:right}.pw-item-name{display:flex;align-items:center;gap:10px;font-weight:700}.pw-item-name img{width:34px;height:34px;object-fit:contain;flex:0 0 34px}.pw-value{font-size:14px;font-weight:700;color:#e4b46e;white-space:nowrap}
+    .pw-groups{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px}.pw-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid #292e36;border-radius:8px;background:#0d1015}
+    .pw-group-row{cursor:pointer}.pw-group-row:hover{border-color:#9b6a32;color:#efbd77}.pw-note{margin:6px 0 0;color:#8f96a2;font-size:12px}.pw-table-controls{display:flex;align-items:center;justify-content:space-between;gap:12px}.pw-table-controls select{width:min(320px,100%);height:38px;border:1px solid #383e48;border-radius:7px;background:#0b0e12;color:#fff;padding:0 10px}
     .pw-check{display:flex!important;grid-auto-flow:column;align-items:center;justify-content:start}.pw-check input{width:16px;height:16px}
-    @media(max-width:850px){.pw-summary,.pw-breakdowns{grid-template-columns:1fr 1fr}}
+    @media(max-width:850px){.pw-summary{grid-template-columns:1fr 1fr}.pw-groups{grid-template-columns:1fr 1fr}}
   `;
   document.documentElement.append(style);
 
@@ -577,24 +635,22 @@
         <label>리그<select data-league></select></label>
         <label class="pw-value-field">탭 표식 가격<div class="pw-inline"><input data-marker-price type="number" min="0.0001" step="any" value="1"><select data-marker-currency></select></div></label>
         <label class="pw-value-field">최소 표시 가치<div class="pw-inline"><input data-minimum type="number" min="0" step="0.1" value="0"><select data-minimum-currency></select></div></label>
+        <label>가치 표시 단위<select data-display-currency></select></label>
         <label class="pw-check"><input data-refresh type="checkbox">시세 강제 갱신</label>
         <button class="pw-button" data-sync>창고 동기화</button>
       </section>
       <div class="pw-status" data-status>모든 요청과 저장은 이 브라우저에서만 처리됩니다.</div>
       <section data-results hidden>
         <div class="pw-panel pw-summary">
-          <article class="pw-card"><span>디바인 오브</span><strong data-total-divine>-</strong></article>
-          <article class="pw-card"><span>엑잘티드 오브</span><strong data-total-exalted>-</strong></article>
-          <article class="pw-card"><span>카오스 오브</span><strong data-total-chaos>-</strong></article>
-          <article class="pw-card"><span>소멸의 오브</span><strong data-total-annul>-</strong></article>
+          <article class="pw-card"><span>추적 가능한 총자산</span><strong data-total-value>-</strong></article>
+          <article class="pw-card"><span>계산된 품목</span><strong data-priced-count>-</strong></article>
+          <article class="pw-card"><span>가격 미확인</span><strong data-unpriced-count>-</strong></article>
+          <article class="pw-card"><span>시세 갱신</span><strong data-price-updated>-</strong></article>
         </div>
-        <div class="pw-breakdowns">
-          <section class="pw-panel"><h2>카테고리별</h2><div data-categories></div></section>
-          <section class="pw-panel"><h2>탭별</h2><div data-tabs></div></section>
-        </div>
+        <section class="pw-panel"><h2>보관함 종류별 자산</h2><p class="pw-note">실제 탭 이름이 아니라 아이템 종류를 기준으로 자동 분류합니다.</p><div class="pw-groups" data-storage-groups></div></section>
         <section class="pw-panel">
-          <div class="pw-table-controls"><h2>가치가 높은 화폐성 아이템</h2><select data-tab-filter aria-label="창고 탭 선택"><option value="">모든 창고 탭</option></select></div>
-          <table class="pw-table"><thead><tr><th>아이템</th><th>탭</th><th class="num">수량</th><th class="num">개당</th><th class="num">가치</th></tr></thead><tbody data-items></tbody></table>
+          <div class="pw-table-controls"><h2>가치가 높은 화폐성 아이템</h2><select data-group-filter aria-label="보관함 종류 선택"><option value="">모든 보관함 종류</option></select></div>
+          <table class="pw-table"><thead><tr><th>아이템</th><th>보관함 종류</th><th class="num">수량</th><th class="num">개당 가치</th><th class="num">총가치</th></tr></thead><tbody data-items></tbody></table>
         </section>
       </section>
     </main>
@@ -609,30 +665,37 @@
     markerCurrency: $("[data-marker-currency]"),
     minimum: $("[data-minimum]"),
     minimumCurrency: $("[data-minimum-currency]"),
+    displayCurrency: $("[data-display-currency]"),
     refresh: $("[data-refresh]"),
     sync: $("[data-sync]"),
     status: $("[data-status]"),
     results: $("[data-results]"),
-    totalDivine: $("[data-total-divine]"),
-    totalExalted: $("[data-total-exalted]"),
-    totalChaos: $("[data-total-chaos]"),
-    totalAnnul: $("[data-total-annul]"),
-    categories: $("[data-categories]"),
-    tabs: $("[data-tabs]"),
+    totalValue: $("[data-total-value]"),
+    pricedCount: $("[data-priced-count]"),
+    unpricedCount: $("[data-unpriced-count]"),
+    priceUpdated: $("[data-price-updated]"),
+    storageGroups: $("[data-storage-groups]"),
     items: $("[data-items]"),
-    tabFilter: $("[data-tab-filter]")
+    groupFilter: $("[data-group-filter]")
   };
 
   launcher.addEventListener("click", () => overlay.classList.add("open"));
   $("[data-close]").addEventListener("click", () => overlay.classList.remove("open"));
   $("[data-detect]").addEventListener("click", detectAccount);
   ui.sync.addEventListener("click", () => synchronize().catch(showError));
-  ui.tabFilter.addEventListener("change", () => renderItems());
+  ui.groupFilter.addEventListener("change", () => renderItems());
+  ui.displayCurrency.addEventListener("change", () => {
+    render(renderedResult);
+    persistDisplayCurrency().catch(showError);
+  });
 
   initialize().catch(showError);
 
   async function initialize() {
     ui.minimumCurrency.replaceChildren(
+      ...core.DISPLAY_CURRENCIES.map((currency) => option(currency.id, currency.label))
+    );
+    ui.displayCurrency.replaceChildren(
       ...core.DISPLAY_CURRENCIES.map((currency) => option(currency.id, currency.label))
     );
     const leagues = await apiRequest(`${API_ROOT}/data/leagues`);
@@ -651,7 +714,9 @@
         .map((league) => option(league.id, league.text))
     );
 
-    const state = await GM_getValue(STATE_KEY, null);
+    const state =
+      (await GM_getValue(STATE_KEY, null)) ||
+      (await GM_getValue(LEGACY_STATE_KEY, null));
     if (state) {
       ui.account.value = core.normalizeTradeAccountName(state.accountName);
       ui.league.value = state.league || ui.league.value;
@@ -659,6 +724,7 @@
       ui.markerCurrency.value = state.markerCurrency || "mirror";
       ui.minimum.value = String(state.minimumValue ?? 0);
       ui.minimumCurrency.value = state.minimumCurrency || "exalted";
+      ui.displayCurrency.value = state.displayCurrency || "exalted";
       if (state.result) {
         render(core.localizeResultNames(state.result, localizedStaticGroups));
       }
@@ -684,6 +750,7 @@
       markerCurrency: ui.markerCurrency.value,
       minimumValue: Math.max(0, Number(ui.minimum.value) || 0),
       minimumCurrency: ui.minimumCurrency.value,
+      displayCurrency: ui.displayCurrency.value,
       forcePriceRefresh: ui.refresh.checked
     };
     ui.account.value = settings.accountName;
@@ -735,6 +802,7 @@
         {
           priceUpdatedAt: priceResult.updatedAt,
           usedStalePrices: priceResult.usedStalePrices,
+          priceGroups: priceResult.priceGroups,
           warnings
         }
       );
@@ -795,11 +863,12 @@
       for (let index = 0; index < core.POE_NINJA_PRICE_TYPES.length; index += 1) {
         const type = core.POE_NINJA_PRICE_TYPES[index];
         setStatus(`poe.ninja 시세 ${type} · ${index + 1} / ${core.POE_NINJA_PRICE_TYPES.length}`);
-        overviews.push(
-          await ninjaRequest(
+        overviews.push({
+          ...(await ninjaRequest(
             `${POE_NINJA_ROOT}?league=${encodeURIComponent(league)}&type=${encodeURIComponent(type)}`
-          )
-        );
+          )),
+          priceType: type
+        });
       }
 
       const parsed = core.parsePoeNinjaPrices(overviews);
@@ -808,6 +877,7 @@
       }
       const fresh = {
         prices: parsed.prices,
+        priceGroups: parsed.priceGroups,
         rates: parsed.rates,
         updatedAt: new Date().toISOString()
       };
@@ -896,85 +966,127 @@
   }
 
   function render(result) {
+    if (!result) return;
     renderedResult = result;
     ui.results.hidden = false;
-    ui.totalDivine.textContent = `${format(result.totals.divine)} 딥`;
-    ui.totalExalted.textContent = `${format(result.totals.exalted)} 엑잘`;
-    ui.totalChaos.textContent = `${format(result.totals.chaos)} 카오스`;
-    ui.totalAnnul.textContent = `${format(result.totals.annul)} 소멸`;
-    renderBreakdown(ui.categories, result.categories, false);
-    renderBreakdown(ui.tabs, result.tabs, true);
-    populateTabFilter(result.visibleItems);
+    const currency = selectedDisplayCurrency();
+    ui.totalValue.textContent = formatExaltedValue(
+      result.totalExalted,
+      result.rates,
+      currency
+    );
+    ui.pricedCount.textContent = result.visibleItems.length.toLocaleString();
+    ui.unpricedCount.textContent = result.unpricedItems.length.toLocaleString();
+    ui.priceUpdated.textContent = result.priceUpdatedAt
+      ? new Intl.DateTimeFormat("ko-KR", {
+          month: "numeric",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit"
+        }).format(new Date(result.priceUpdatedAt))
+      : "-";
+    renderStorageGroups(result.storageGroups || []);
+    populateGroupFilter(result.visibleItems);
     renderItems();
   }
 
-  function populateTabFilter(items) {
-    const current = ui.tabFilter.value;
-    const tabs = [...new Set(items.map((item) => item.tabName))].sort((a, b) =>
-      core.localizeTabName(a).localeCompare(core.localizeTabName(b), "ko")
+  function populateGroupFilter(items) {
+    const current = ui.groupFilter.value;
+    const groups = [...new Set(items.map((item) => item.storageGroup))].sort(
+      (a, b) => a.localeCompare(b, "ko")
     );
-    ui.tabFilter.replaceChildren(
-      option("", "모든 창고 탭"),
-      ...tabs.map((tabName) => option(tabName, core.localizeTabName(tabName)))
+    ui.groupFilter.replaceChildren(
+      option("", "모든 보관함 종류"),
+      ...groups.map((group) => option(group, group))
     );
-    ui.tabFilter.value = tabs.includes(current) ? current : "";
+    ui.groupFilter.value = groups.includes(current) ? current : "";
   }
 
   function renderItems() {
     if (!renderedResult) return;
-    const selectedTab = ui.tabFilter.value;
+    const selectedGroup = ui.groupFilter.value;
+    const currency = selectedDisplayCurrency();
     ui.items.replaceChildren(
       ...renderedResult.visibleItems
-        .filter((item) => !selectedTab || item.tabName === selectedTab)
+        .filter((item) => !selectedGroup || item.storageGroup === selectedGroup)
         .map((item) => {
         const row = document.createElement("tr");
         row.innerHTML = `<td></td><td></td><td class="num"></td><td class="num"></td><td class="num"></td>`;
-        row.children[0].textContent = item.name;
-        row.children[1].textContent = core.localizeTabName(item.tabName);
+        const itemCell = row.children[0];
+        itemCell.className = "pw-item-name";
+        if (item.image) {
+          const image = document.createElement("img");
+          image.src = item.image;
+          image.alt = "";
+          image.loading = "lazy";
+          itemCell.append(image);
+        }
+        itemCell.append(document.createTextNode(item.name));
+        row.children[1].textContent = item.storageGroup;
         row.children[2].textContent = item.quantity.toLocaleString();
-        row.children[3].classList.add("pw-currency-values");
-        row.children[4].classList.add("pw-currency-values");
-        row.children[3].textContent = formatAllValues(
+        row.children[3].classList.add("pw-value");
+        row.children[4].classList.add("pw-value");
+        row.children[3].textContent = formatExaltedValue(
           item.unitExalted,
-          renderedResult.rates
+          renderedResult.rates,
+          currency
         );
-        row.children[4].textContent = formatAllValues(
+        row.children[4].textContent = formatExaltedValue(
           item.totalExalted,
-          renderedResult.rates
+          renderedResult.rates,
+          currency
         );
         return row;
       })
     );
   }
 
-  function renderBreakdown(container, rows, isTabs) {
-    container.replaceChildren(
+  function renderStorageGroups(rows) {
+    const currency = selectedDisplayCurrency();
+    ui.storageGroups.replaceChildren(
       ...rows.map((entry) => {
         const row = document.createElement("div");
-        row.className = `pw-row${isTabs ? " pw-tab-row" : ""}`;
+        row.className = "pw-row pw-group-row";
         const name = document.createElement("span");
-        name.textContent = isTabs ? core.localizeTabName(entry.name) : entry.name;
+        name.textContent = entry.name;
         const value = document.createElement("strong");
-        value.className = "pw-currency-values";
-        value.textContent = formatAllValues(entry.totalExalted, renderedResult.rates);
+        value.className = "pw-value";
+        value.textContent = formatExaltedValue(
+          entry.totalExalted,
+          renderedResult.rates,
+          currency
+        );
         row.append(name, value);
-        if (isTabs) {
-          row.title = "이 탭의 아이템만 보기";
-          row.addEventListener("click", () => {
-            ui.tabFilter.value = entry.name;
-            renderItems();
-          });
-        }
+        row.title = "이 보관함 종류의 아이템만 보기";
+        row.addEventListener("click", () => {
+          ui.groupFilter.value = entry.name;
+          renderItems();
+        });
         return row;
       })
     );
   }
 
-  function formatAllValues(exaltedValue, rates) {
+  function selectedDisplayCurrency() {
+    return (
+      core.DISPLAY_CURRENCIES.find(
+        (currency) => currency.id === ui.displayCurrency.value
+      ) || core.DISPLAY_CURRENCIES[0]
+    );
+  }
+
+  function formatExaltedValue(exaltedValue, rates, currency) {
     const values = core.valuesFromExalted(exaltedValue, rates);
-    return core.DISPLAY_CURRENCIES.map(
-      (currency) => `${format(values[currency.id])} ${currency.short}`
-    ).join("\n");
+    return `${format(values[currency.id])} ${currency.short}`;
+  }
+
+  async function persistDisplayCurrency() {
+    const state = (await GM_getValue(STATE_KEY, null)) || {};
+    await GM_setValue(STATE_KEY, {
+      ...state,
+      displayCurrency: ui.displayCurrency.value,
+      ...(renderedResult ? { result: renderedResult } : {})
+    });
   }
 
   function setStatus(message, type = "") {
