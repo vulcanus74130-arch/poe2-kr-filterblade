@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         POE2 공개 창고 화폐 자산 계산기
 // @namespace    https://poe2.kr/
-// @version      0.3.0
+// @version      0.3.1
 // @description  정확한 탭 표식 가격으로 공개 창고의 화폐성 자산을 로컬에서 계산합니다.
 // @match        https://www.pathofexile.com/trade2/*
 // @match        https://www.pathofexile.com/ko/trade2/*
@@ -480,13 +480,14 @@
     #poe2-wealth-launcher{position:fixed;right:20px;bottom:20px;z-index:2147483646;border:1px solid #d19a50;border-radius:999px;background:#16130f;color:#efbd77;padding:11px 17px;font:700 13px system-ui;cursor:pointer;box-shadow:0 8px 28px #0008}
     #poe2-wealth-overlay{position:fixed;inset:0;z-index:2147483647;background:#06080bd9;display:none;overflow:auto;color:#eef0f3;font:14px system-ui}
     #poe2-wealth-overlay.open{display:block}
+    #poe2-wealth-overlay,#poe2-wealth-overlay *{box-sizing:border-box}
     .pw-shell{width:min(1120px,calc(100% - 40px));margin:28px auto 80px}
     .pw-head,.pw-form,.pw-summary,.pw-row{display:flex;align-items:center;gap:12px}
     .pw-head{justify-content:space-between}.pw-head h1{margin:0;font:400 32px Georgia;color:#f2f2f2}.pw-head button{font-size:22px}
     .pw-panel{margin-top:16px;border:1px solid #30343c;border-radius:12px;background:#12151a;padding:18px}
-    .pw-form{flex-wrap:wrap;align-items:end}.pw-form label{display:grid;gap:6px;min-width:150px;flex:1;color:#aab0ba;font-size:12px}
+    .pw-form{flex-wrap:wrap;align-items:end}.pw-form label{display:grid;gap:6px;min-width:150px;flex:1;color:#aab0ba;font-size:12px}.pw-form label.pw-value-field{min-width:270px}
     .pw-form input,.pw-form select{height:38px;border:1px solid #383e48;border-radius:7px;background:#0b0e12;color:#fff;padding:0 10px}
-    .pw-inline{display:flex;gap:7px}.pw-inline input{flex:1}.pw-inline select{width:145px}
+    .pw-inline{display:flex;gap:7px;min-width:0}.pw-inline input{flex:1;min-width:0}.pw-value-field .pw-inline input{flex:0 0 96px;width:96px;min-width:96px}.pw-value-field .pw-inline select{flex:1;width:auto;min-width:145px}
     .pw-button{height:40px;border:0;border-radius:7px;background:#c38a43;color:#171006;padding:0 16px;font-weight:800;cursor:pointer}
     .pw-button.secondary{background:#252a32;color:#ddd}.pw-summary{display:grid;grid-template-columns:repeat(4,1fr)}
     .pw-card{border:1px solid #2d323b;border-radius:10px;background:#0d1015;padding:16px}.pw-card span{color:#9198a4;font-size:12px}.pw-card strong{display:block;margin-top:8px;font-size:23px;color:#e4b46e}
@@ -511,8 +512,8 @@
       <section class="pw-panel pw-form">
         <label>계정명<div class="pw-inline"><input data-account placeholder="Account#1234"><button class="pw-button secondary" data-detect>감지</button></div></label>
         <label>리그<select data-league></select></label>
-        <label>탭 표식 가격<div class="pw-inline"><input data-marker-price type="number" min="0.0001" step="any" value="1"><select data-marker-currency></select></div></label>
-        <label>최소 표시 가치<div class="pw-inline"><input data-minimum type="number" min="0" step="0.1" value="0"><select data-minimum-currency></select></div></label>
+        <label class="pw-value-field">탭 표식 가격<div class="pw-inline"><input data-marker-price type="number" min="0.0001" step="any" value="1"><select data-marker-currency></select></div></label>
+        <label class="pw-value-field">최소 표시 가치<div class="pw-inline"><input data-minimum type="number" min="0" step="0.1" value="0"><select data-minimum-currency></select></div></label>
         <label class="pw-check"><input data-refresh type="checkbox">시세 강제 갱신</label>
         <button class="pw-button" data-sync>창고 동기화</button>
       </section>
