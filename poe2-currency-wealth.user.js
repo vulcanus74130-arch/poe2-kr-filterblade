@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         POE2 공개 창고 화폐 자산 계산기
+// @name         Exile Ledger — POE2 창고 자산 추적기
 // @namespace    https://poe2.kr/
-// @version      0.6.1
-// @description  정확한 탭 표식 가격으로 공개 창고의 화폐성 자산을 로컬에서 계산합니다.
+// @version      0.7.0
+// @description  POE2 공개 창고의 화폐성 자산 가치와 변동을 추적합니다.
 // @match        https://www.pathofexile.com/trade2/*
 // @match        https://www.pathofexile.com/ko/trade2/*
 // @match        https://poe.game.daum.net/trade2/*
@@ -828,7 +828,7 @@
     #poe2-wealth-overlay,#poe2-wealth-overlay *{box-sizing:border-box}
     .pw-shell{width:min(1120px,calc(100% - 40px));margin:28px auto 80px}
     .pw-head,.pw-form,.pw-summary,.pw-row{display:flex;align-items:center;gap:12px}
-    .pw-head{justify-content:space-between}.pw-head h1{margin:0;font:400 32px Georgia;color:#f2f2f2}.pw-head button{font-size:22px}
+    .pw-head{justify-content:space-between}.pw-head h1{margin:0;font:400 32px Georgia;color:#f2f2f2}.pw-head p{margin:5px 0 0;color:#9da4af;font-size:13px}.pw-head button{font-size:22px}
     .pw-panel{margin-top:16px;border:1px solid #30343c;border-radius:12px;background:#12151a;padding:18px}
     .pw-form{flex-wrap:wrap;align-items:end}.pw-form label{display:grid;gap:6px;min-width:150px;flex:1;color:#aab0ba;font-size:12px}.pw-form label.pw-value-field{min-width:270px}
     .pw-form input,.pw-form select{height:38px;border:1px solid #383e48;border-radius:7px;background:#0b0e12;color:#fff;padding:0 10px}
@@ -840,7 +840,7 @@
     .pw-table{width:100%;border-collapse:collapse;margin-top:12px}.pw-table th,.pw-table td{padding:12px 10px;border-bottom:1px solid #292e36;text-align:left;vertical-align:middle}.pw-table th{color:#8f96a2;font-size:11px}.pw-table .num{text-align:right}.pw-item-name{display:flex;align-items:center;gap:10px;font-weight:700}.pw-item-name img{width:34px;height:34px;object-fit:contain;flex:0 0 34px}.pw-value{font-size:14px;font-weight:700;color:#e4b46e;white-space:nowrap}
     .pw-groups{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px}.pw-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid #292e36;border-radius:8px;background:#0d1015}
     .pw-group-row{cursor:pointer}.pw-group-row:hover{border-color:#9b6a32;color:#efbd77}.pw-note{margin:6px 0 0;color:#8f96a2;font-size:12px}.pw-table-controls{display:flex;align-items:center;justify-content:space-between;gap:12px}.pw-table-controls select{width:min(320px,100%);height:38px;border:1px solid #383e48;border-radius:7px;background:#0b0e12;color:#fff;padding:0 10px}
-    .pw-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.pw-toolbar input,.pw-toolbar select{height:38px;border:1px solid #383e48;border-radius:7px;background:#0b0e12;color:#fff;padding:0 10px}.pw-toolbar input[type=search]{min-width:220px;flex:1}.pw-alert{border-color:#9d3434!important;background:#2a1114!important;color:#fecaca}.pw-badge{display:inline-block;margin-left:6px;border-radius:999px;background:#3b2a16;color:#f5c57a;padding:2px 7px;font-size:10px}.pw-action{border:1px solid #464d59;border-radius:6px;background:#20252d;color:#ddd;padding:5px 8px;cursor:pointer}.pw-action:hover{border-color:#c38a43}.pw-details{margin-top:12px}.pw-details summary{cursor:pointer;color:#e4b46e;font-weight:700}.pw-unpriced-list,.pw-change-list{display:grid;gap:8px;margin-top:10px}.pw-unpriced-row{display:flex;align-items:center;gap:10px;border-bottom:1px solid #292e36;padding:8px 0}.pw-unpriced-row img{width:30px;height:30px;object-fit:contain}.pw-unpriced-row span:first-of-type{flex:1}.pw-history-chart{display:flex;align-items:end;gap:3px;height:110px;margin-top:14px;border-bottom:1px solid #343944}.pw-history-bar{flex:1;min-width:3px;background:#b67d36;border-radius:3px 3px 0 0}.pw-history-list{display:grid;gap:6px;margin-top:12px}.pw-history-row{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:#bfc4cc}.pw-evidence{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.pw-evidence span{border:1px solid #303640;border-radius:999px;padding:5px 9px;color:#b8bec8;font-size:11px}
+    .pw-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.pw-toolbar input,.pw-toolbar select{height:38px;border:1px solid #383e48;border-radius:7px;background:#0b0e12;color:#fff;padding:0 10px}.pw-toolbar input[type=search]{min-width:220px;flex:1}.pw-alert{border-color:#9d3434!important;background:#2a1114!important;color:#fecaca}.pw-badge{display:inline-block;margin-left:6px;border-radius:999px;background:#3b2a16;color:#f5c57a;padding:2px 7px;font-size:10px}.pw-action{border:1px solid #464d59;border-radius:6px;background:#20252d;color:#ddd;padding:5px 8px;cursor:pointer}.pw-action:hover{border-color:#c38a43}.pw-details{margin-top:12px}.pw-details summary{cursor:pointer;color:#e4b46e;font-weight:700}.pw-unpriced-list,.pw-change-list{display:grid;gap:8px;margin-top:10px}.pw-unpriced-row{display:flex;align-items:center;gap:10px;border-bottom:1px solid #292e36;padding:8px 0}.pw-unpriced-row img{width:30px;height:30px;object-fit:contain}.pw-unpriced-row span:first-of-type{flex:1}.pw-history-chart{display:flex;align-items:end;gap:8px;height:130px;margin-top:14px;border-bottom:1px solid #343944}.pw-history-bar{position:relative;flex:1;min-width:10px;max-width:70px;background:#b67d36;border-radius:5px 5px 0 0}.pw-history-point{position:absolute;left:50%;top:0;width:10px;height:10px;border:2px solid #f2bf75;border-radius:50%;background:#12151a;transform:translate(-50%,-50%)}.pw-history-value{position:absolute;left:50%;top:-24px;transform:translateX(-50%);white-space:nowrap;color:#e4b46e;font-size:10px}.pw-history-empty{display:grid;place-items:center;height:110px;color:#8f96a2}.pw-history-list{display:grid;gap:6px;margin-top:12px}.pw-history-row{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:#bfc4cc}.pw-evidence{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.pw-evidence span{border:1px solid #303640;border-radius:999px;padding:5px 9px;color:#b8bec8;font-size:11px}
     .pw-check{display:flex!important;grid-auto-flow:column;align-items:center;justify-content:start}.pw-check input{width:16px;height:16px}
     @media(max-width:850px){.pw-summary{grid-template-columns:1fr 1fr}.pw-groups{grid-template-columns:1fr 1fr}}
   `;
@@ -848,14 +848,14 @@
 
   const launcher = document.createElement("button");
   launcher.id = "poe2-wealth-launcher";
-  launcher.textContent = "화폐 자산 계산";
+  launcher.textContent = "Exile Ledger";
   document.body.append(launcher);
 
   const overlay = document.createElement("div");
   overlay.id = "poe2-wealth-overlay";
   overlay.innerHTML = `
     <main class="pw-shell">
-      <header class="pw-head"><h1>POE2 공개 창고 화폐 자산 계산기</h1><button class="pw-button secondary" data-close>×</button></header>
+      <header class="pw-head"><div><h1>Exile Ledger</h1><p>POE2 공개 창고 자산 분석 및 변동 추적</p></div><button class="pw-button secondary" data-close aria-label="엑자일 렛저 닫기">×</button></header>
       <section class="pw-panel pw-form">
         <label>계정명<div class="pw-inline"><input data-account placeholder="Account#1234"><button class="pw-button secondary" data-detect>감지</button></div></label>
         <label>리그<select data-league></select></label>
@@ -885,7 +885,7 @@
           <details class="pw-details"><summary>가격 미확인 품목 <span data-unpriced-inline>0</span>개</summary><div class="pw-unpriced-list" data-unpriced-list></div></details>
         </section>
         <section class="pw-panel">
-          <div class="pw-table-controls"><h2>자산 변동 기록</h2><div><button class="pw-action" data-delete-history>전체 삭제</button></div></div>
+          <div class="pw-table-controls"><h2>자산 변동 기록 <span class="pw-note" data-history-count>0개</span></h2><div><button class="pw-action" data-delete-history>전체 삭제</button></div></div>
           <div class="pw-history-chart" data-history-chart></div>
           <div class="pw-change-list" data-change-summary></div>
           <div class="pw-history-list" data-history-list></div>
@@ -927,6 +927,7 @@
     unpricedInline: $("[data-unpriced-inline]"),
     unpricedList: $("[data-unpriced-list]"),
     historyChart: $("[data-history-chart]"),
+    historyCount: $("[data-history-count]"),
     changeSummary: $("[data-change-summary]"),
     historyList: $("[data-history-list]"),
     deleteHistory: $("[data-delete-history]")
@@ -1609,17 +1610,36 @@
     const rate = Number(renderedResult?.rates?.[currency.id]) || 1;
     const multiplier = valueMultiplier();
     const maximum = Math.max(1, ...history.map((item) => item.totalExalted));
-    ui.historyChart.replaceChildren(
-      ...history.map((snapshot) => {
+    ui.historyCount.textContent = `${history.length.toLocaleString()}개`;
+    if (history.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "pw-history-empty";
+      empty.textContent = "동기화 후 자산 기록이 생성됩니다.";
+      ui.historyChart.replaceChildren(empty);
+    } else {
+      ui.historyChart.replaceChildren(
+        ...history.map((snapshot) => {
         const bar = document.createElement("div");
         bar.className = "pw-history-bar";
-        bar.style.height = `${Math.max(3, (snapshot.totalExalted / maximum) * 100)}%`;
+        bar.style.height = `${Math.max(12, (snapshot.totalExalted / maximum) * 100)}%`;
         bar.title = `${formatDateTime(snapshot.createdAt)} · ${format(
           (snapshot.totalExalted / rate) * multiplier
         )} ${currency.short}`;
+        const point = document.createElement("span");
+        point.className = "pw-history-point";
+        bar.append(point);
+        if (history.length === 1) {
+          const value = document.createElement("span");
+          value.className = "pw-history-value";
+          value.textContent = `${format(
+            (snapshot.totalExalted / rate) * multiplier
+          )} ${currency.short}`;
+          bar.append(value);
+        }
         return bar;
-      })
-    );
+        })
+      );
+    }
 
     const previous = history.at(-2);
     const current = history.at(-1);
