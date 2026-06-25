@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         POE2 공개 창고 화폐 자산 계산기
 // @namespace    https://poe2.kr/
-// @version      0.4.0
+// @version      0.4.1
 // @description  정확한 탭 표식 가격으로 공개 창고의 화폐성 자산을 로컬에서 계산합니다.
 // @match        https://www.pathofexile.com/trade2/*
 // @match        https://www.pathofexile.com/ko/trade2/*
+// @match        https://poe.game.daum.net/trade2/*
+// @match        https://poe.kakaogames.com/trade2/*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
@@ -517,7 +519,13 @@
   "use strict";
 
   const core = globalThis.Poe2WealthCore;
-  const API_ROOT = "https://www.pathofexile.com/api/trade2";
+  const IS_KAKAO_TRADE = [
+    "poe.game.daum.net",
+    "poe.kakaogames.com"
+  ].includes(location.hostname);
+  const API_ROOT = IS_KAKAO_TRADE
+    ? "https://poe.kakaogames.com/api/trade2"
+    : "https://www.pathofexile.com/api/trade2";
   const KOREAN_STATIC_URL =
     "https://poe.kakaogames.com/api/trade2/data/static?realm=poe2";
   const POE_NINJA_ROOT = "https://poe.ninja/poe2/api/economy/exchange/current/overview";
