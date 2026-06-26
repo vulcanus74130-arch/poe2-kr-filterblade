@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Exile Ledger — POE2 창고 자산 추적기
 // @namespace    https://poe2.kr/
-// @version      0.7.3
+// @version      0.7.4
 // @description  POE2 공개 창고의 화폐성 자산 가치와 변동을 추적합니다.
 // @match        https://www.pathofexile.com/trade2/*
 // @match        https://www.pathofexile.com/ko/trade2/*
@@ -77,14 +77,35 @@
   ];
 
   const POE2_LEAGUES = [
-    { id: "Runes of Aldur", label: "알두르의 룬", tradeEnabled: true },
-    { id: "HC Runes of Aldur", label: "알두르의 룬 하드코어", tradeEnabled: true },
-    { id: "Standard", label: "스탠다드", tradeEnabled: true },
-    { id: "Hardcore", label: "하드코어", tradeEnabled: true },
+    {
+      id: "Runes of Aldur",
+      label: "알두르의 룬",
+      tradeEnabled: true,
+      poeNinjaLeague: "Runes of Aldur"
+    },
+    {
+      id: "HC Runes of Aldur",
+      label: "알두르의 룬 하드코어",
+      tradeEnabled: true,
+      poeNinjaLeague: "HC Runes of Aldur"
+    },
+    {
+      id: "Standard",
+      label: "스탠다드",
+      tradeEnabled: true,
+      poeNinjaLeague: "Standard"
+    },
+    {
+      id: "Hardcore",
+      label: "하드코어",
+      tradeEnabled: true,
+      poeNinjaLeague: "Hardcore"
+    },
     {
       id: "SSF Runes of Aldur",
       label: "SSF 알두르의 룬 (거래 검색 불가)",
-      tradeEnabled: false
+      tradeEnabled: false,
+      poeNinjaLeague: "SSF Runes of Aldur"
     }
   ];
 
@@ -223,14 +244,27 @@
       .map((league) => ({
         id: league.id,
         label: league.text || league.id,
-        tradeEnabled: true
+        tradeEnabled: true,
+        poeNinjaLeague: league.id
       }));
     return [...POE2_LEAGUES, ...extraLeagues];
   }
 
+  function findLeagueOption(leagueId) {
+    return POE2_LEAGUES.find((entry) => entry.id === leagueId) || null;
+  }
+
   function isTradeEnabledLeague(leagueId) {
-    const league = POE2_LEAGUES.find((entry) => entry.id === leagueId);
+    const league = findLeagueOption(leagueId);
     return league ? league.tradeEnabled : Boolean(leagueId);
+  }
+
+  function poeNinjaLeagueForTradeLeague(leagueId) {
+    return findLeagueOption(leagueId)?.poeNinjaLeague || leagueId;
+  }
+
+  function leagueLabel(leagueId) {
+    return findLeagueOption(leagueId)?.label || leagueId || "";
   }
 
   function createAllowedItemMap(groups, localizedGroups = []) {
@@ -795,6 +829,8 @@
     buildSearchPayload,
     buildLeagueOptions,
     isTradeEnabledLeague,
+    poeNinjaLeagueForTradeLeague,
+    leagueLabel,
     extractMarkerCurrencies,
     createAllowedItemMap,
     localizeResultNames,
@@ -1273,6 +1309,8 @@
   }
 
   async function loadPoeNinjaPrices(league, forceRefresh) {
+    const poeNinjaLeague = core.poeNinjaLeagueForTradeLeague(league);
+    const leagueLabel = core.leagueLabel(league);
     const allCaches = await GM_getValue(CACHE_KEY, {});
     const leagueCache = allCaches[league] || { categories: {} };
     const categories = { ...(leagueCache.categories || {}) };
@@ -1288,7 +1326,7 @@
         cachedCategory?.data &&
         Date.now() - cachedAt < PRICE_CACHE_TTL;
       setStatus(
-        `poe.ninja 데이터 ${type} · ${index + 1} / ${core.POE_NINJA_PRICE_TYPES.length}`
+        `poe.ninja 데이터 ${leagueLabel} · ${type} · ${index + 1} / ${core.POE_NINJA_PRICE_TYPES.length}`
       );
 
       if (categoryFresh) {
@@ -1298,7 +1336,7 @@
 
       try {
         const data = await ninjaRequest(
-          `${POE_NINJA_ROOT}?league=${encodeURIComponent(league)}&type=${encodeURIComponent(type)}`
+          `${POE_NINJA_ROOT}?league=${encodeURIComponent(poeNinjaLeague)}&type=${encodeURIComponent(type)}`
         );
         categories[type] = {
           data,
@@ -1314,7 +1352,7 @@
 
     const parsed = core.parsePoeNinjaPrices(overviews);
     if (!parsed.rates.chaos || !parsed.rates.divine || !parsed.rates.annul) {
-      throw new Error("poe.ninja에서 카오스·딥·소멸 환율을 찾지 못했습니다.");
+      throw new Error(`poe.ninja에서 ${leagueLabel} 리그의 카오스·딥·소멸 환율을 찾지 못했습니다.`);
     }
     const updatedAt = Object.values(categories)
       .map((category) => category.updatedAt)
