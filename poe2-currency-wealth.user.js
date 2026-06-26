@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Exile Ledger — POE2 창고 자산 추적기
 // @namespace    https://poe2.kr/
-// @version      0.7.1
+// @version      0.7.2
 // @description  POE2 공개 창고의 화폐성 자산 가치와 변동을 추적합니다.
 // @match        https://www.pathofexile.com/trade2/*
 // @match        https://www.pathofexile.com/ko/trade2/*
@@ -55,8 +55,6 @@
   const EXCLUDED_NAME_PATTERNS = [
     /\bWaystone\b/i,
     /\bUnique\b/i,
-    /\bLogbook\b/i,
-    /\bSaga\b/i,
     /\bWombgift\b/i,
     /\bInvitation\b/i,
     /\bBreachlord Sac\b/i,
