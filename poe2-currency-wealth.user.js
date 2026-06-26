@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Exile Ledger — POE2 창고 자산 추적기
 // @namespace    https://poe2.kr/
-// @version      0.7.0
+// @version      0.7.1
 // @description  POE2 공개 창고의 화폐성 자산 가치와 변동을 추적합니다.
 // @match        https://www.pathofexile.com/trade2/*
 // @match        https://www.pathofexile.com/ko/trade2/*
@@ -1294,7 +1294,7 @@
   }
 
   async function ninjaRequest(url) {
-    const response = await gmRequest(url, {});
+    const response = await gmRequest(url, { anonymous: true });
     if (response.status < 200 || response.status >= 300 || !response.data) {
       throw new Error(`poe.ninja 시세 조회 실패 (${response.status})`);
     }
@@ -1334,7 +1334,7 @@
           Accept: "application/json",
           ...(options.body ? { "Content-Type": "application/json" } : {})
         },
-        anonymous: false,
+        anonymous: Boolean(options.anonymous),
         onload: (response) => {
           let data = null;
           try {
