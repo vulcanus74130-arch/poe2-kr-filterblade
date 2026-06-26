@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Exile Ledger — POE2 창고 자산 추적기
 // @namespace    https://poe2.kr/
-// @version      0.7.2
+// @version      0.7.3
 // @description  POE2 공개 창고의 화폐성 자산 가치와 변동을 추적합니다.
 // @match        https://www.pathofexile.com/trade2/*
 // @match        https://www.pathofexile.com/ko/trade2/*
@@ -74,6 +74,18 @@
     { id: "exalted", label: "엑잘티드 오브" },
     { id: "chaos", label: "카오스 오브" },
     { id: "annul", label: "소멸의 오브" }
+  ];
+
+  const POE2_LEAGUES = [
+    { id: "Runes of Aldur", label: "알두르의 룬", tradeEnabled: true },
+    { id: "HC Runes of Aldur", label: "알두르의 룬 하드코어", tradeEnabled: true },
+    { id: "Standard", label: "스탠다드", tradeEnabled: true },
+    { id: "Hardcore", label: "하드코어", tradeEnabled: true },
+    {
+      id: "SSF Runes of Aldur",
+      label: "SSF 알두르의 룬 (거래 검색 불가)",
+      tradeEnabled: false
+    }
   ];
 
   const ASSET_SEARCH_PARTITIONS = [
@@ -202,6 +214,23 @@
       }
     }
     return currencies;
+  }
+
+  function buildLeagueOptions(apiLeagues = []) {
+    const known = new Set(POE2_LEAGUES.map((league) => league.id));
+    const extraLeagues = (apiLeagues || [])
+      .filter((league) => league?.realm === "poe2" && league.id && !known.has(league.id))
+      .map((league) => ({
+        id: league.id,
+        label: league.text || league.id,
+        tradeEnabled: true
+      }));
+    return [...POE2_LEAGUES, ...extraLeagues];
+  }
+
+  function isTradeEnabledLeague(leagueId) {
+    const league = POE2_LEAGUES.find((entry) => entry.id === leagueId);
+    return league ? league.tradeEnabled : Boolean(leagueId);
   }
 
   function createAllowedItemMap(groups, localizedGroups = []) {
@@ -757,12 +786,15 @@
   root.Poe2WealthCore = {
     DISPLAY_CURRENCIES,
     MARKER_CURRENCIES,
+    POE2_LEAGUES,
     ASSET_SEARCH_PARTITIONS,
     POE_NINJA_PRICE_TYPES,
     STORAGE_GROUP_LABELS,
     normalizeName,
     normalizeTradeAccountName,
     buildSearchPayload,
+    buildLeagueOptions,
+    isTradeEnabledLeague,
     extractMarkerCurrencies,
     createAllowedItemMap,
     localizeResultNames,
@@ -984,10 +1016,11 @@
     ui.markerCurrency.replaceChildren(
       ...core.MARKER_CURRENCIES.map((currency) => option(currency.id, currency.label))
     );
+    const leagueOptions = core.buildLeagueOptions(leagues.result || []);
     ui.league.replaceChildren(
-      ...(leagues.result || [])
-        .filter((league) => league.realm === "poe2")
-        .map((league) => option(league.id, league.text))
+      ...leagueOptions.map((league) =>
+        option(league.id, league.label, !league.tradeEnabled)
+      )
     );
 
     const state =
@@ -999,7 +1032,13 @@
     if (state) {
       currentSettings = state;
       ui.account.value = core.normalizeTradeAccountName(state.accountName);
-      ui.league.value = state.league || ui.league.value;
+      if (
+        leagueOptions.some(
+          (league) => league.id === state.league && league.tradeEnabled
+        )
+      ) {
+        ui.league.value = state.league;
+      }
       ui.markerPrice.value = String(state.markerPrice ?? 1);
       ui.markerCurrency.value = state.markerCurrency || "mirror";
       ui.minimum.value = String(state.minimumValue ?? 0);
@@ -1049,6 +1088,10 @@
     };
     ui.account.value = settings.accountName;
     if (!settings.accountName) throw new Error("계정명을 입력하세요.");
+    if (!settings.league) throw new Error("리그를 선택하세요.");
+    if (!core.isTradeEnabledLeague(settings.league)) {
+      throw new Error("SSF 리그는 공개 거래 검색을 지원하지 않아 계산할 수 없습니다.");
+    }
     if (!(settings.markerPrice > 0)) throw new Error("탭 표식 가격을 확인하세요.");
 
     ui.sync.disabled = true;
@@ -1854,10 +1897,11 @@
     ui.sync.disabled = false;
   }
 
-  function option(value, text) {
+  function option(value, text, disabled = false) {
     const item = document.createElement("option");
     item.value = value;
     item.textContent = text;
+    item.disabled = disabled;
     return item;
   }
 
